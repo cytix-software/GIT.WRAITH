@@ -138,7 +138,6 @@ def truncate_code(code, file_path):
         print(f"Truncation error for {file_path}: {str(e)}")
         return code  # Return original on parsing error
 
-# In generate_documentation function:
 def generate_documentation(code, file_path):
     """Generate documentation using Ollama/Mistral"""
     lang, _ = get_language_config(file_path)
@@ -148,6 +147,21 @@ def generate_documentation(code, file_path):
     )
     response = ollama.generate(model='mistral', prompt=prompt)
     return response['response']  # Changed from 'text' to 'response'
+
+def analyze_business_logic_flaws(documentation, lang):
+    """Analyze documentation to identify potential business logic flaws"""
+    prompt = (
+        f"Based on the documentation of a {lang} code file, identify potential business logic flaws. "
+        f"List each flaw with a brief description using numbered list format:\n\n"
+        f"Documentation:\n{documentation}\n\n"
+        f"Potential flaws:\n"
+    )
+    try:
+        response = ollama.generate(model='mistral', prompt=prompt)
+        return response['response'].strip()
+    except Exception as e:
+        print(f"Error analyzing business logic flaws: {str(e)}")
+        return ""
 
 def get_gitignore_spec(repo_path):
     """Load .gitignore patterns into a GitIgnoreSpec"""
@@ -161,6 +175,7 @@ def get_gitignore_spec(repo_path):
 def process_repository(repo_path):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
+    flaws_list = []  # New list to collect flaws
     spec = get_gitignore_spec(repo_path)
 
     for root, dirs, files in os.walk(repo_path, topdown=True):
@@ -187,7 +202,7 @@ def process_repository(repo_path):
         # Process remaining files
         for file in filtered_files:
             file_path = os.path.join(root, file)
-            lang, _ = get_language_config(file_path)
+            lang, config = get_language_config(file_path)
 
             if not lang:
                 continue  # Skip unsupported file types
@@ -209,6 +224,14 @@ def process_repository(repo_path):
             except Exception as e:
                 print(f"Documentation generation failed for {file_path}: {str(e)}")
                 continue
+
+            # Analyze for business logic flaws
+            try:
+                flaws = analyze_business_logic_flaws(doc, lang)
+                if flaws.strip():
+                    flaws_list.append((file_path, flaws))
+            except Exception as e:
+                print(f"Flaw analysis failed for {file_path}: {str(e)}")
 
             # Save documentation
             try:
@@ -237,6 +260,19 @@ def process_repository(repo_path):
                 f.write(f"- **{rel_path}**: {summary}\n")
     except Exception as e:
         print(f"Error creating summary: {str(e)}")
+
+    # Generate business logic flaws report
+    flaws_report_path = os.path.join(repo_path, 'logic-flaws.analysis.md')
+    try:
+        with open(flaws_report_path, 'w') as f:
+            for file_path, flaws in flaws_list:
+                rel_path = os.path.relpath(file_path, repo_path).replace('\\', '/')
+                f.write(f"File: {rel_path}\n")
+                f.write("Potential Business Logic Flaws:\n")
+                f.write(flaws)
+                f.write("\n" + "="*40 + "\n")
+    except Exception as e:
+        print(f"Error creating business logic flaws report: {str(e)}")
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
