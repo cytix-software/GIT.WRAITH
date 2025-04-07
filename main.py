@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
-import ollama
+import boto3
 import argparse
 import re
 from tree_sitter import Node
@@ -11,7 +11,9 @@ from typing import Dict, List, Optional
 import json
 import traceback
 
-MAX_TOKENS = 4096  # Adjust based on Mistral's context limit
+bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
+
+MAX_TOKENS = 200
 
 LANGUAGE_CONFIG = {
     'python': {
@@ -76,6 +78,30 @@ LANGUAGE_CONFIG = {
     }
 }
 
+def bedrock_generate(prompt: str, model_id='mistral.mixtral-8x7b-instruct-v0:1') -> str:
+    body = {
+        "prompt": f"<s>[INST] {prompt} [/INST]",
+        "temperature": 0.5,
+        "top_k": 50,
+        "top_p": 0.9
+    }
+
+    response = bedrock.invoke_model(
+        modelId=model_id,
+        body=json.dumps(body),
+        contentType='application/json',
+        accept='application/json'
+    )
+
+    try:
+        raw = response['body'].read().decode('utf-8')
+        data = json.loads(raw)
+        print(json.dumps(data, indent=2))
+        return data['outputs'][0]['text'].strip()
+    except Exception as e:
+        print("Error parsing Bedrock response:", str(e))
+        return ""
+
 def get_language_config(enable_langs: Optional[List[str]] = None,
                       disable_langs: Optional[List[str]] = None) -> Dict:
     """Return filtered language configuration"""
@@ -87,13 +113,12 @@ def get_language_config(enable_langs: Optional[List[str]] = None,
     return {k: v for k, v in LANGUAGE_CONFIG.items() if k not in disable_langs}
 
 def generate_documentation(code, file_path):
-    """Generate documentation using Ollama/Mistral"""
+    """Generate documentation using Bedrock"""
     prompt = (
         f"Generate documentation for this code file. "
         f"Start with a brief summary, then describe key components:\n\n{code}\n\nDocumentation:"
     )
-    response = ollama.generate(model='mistral', prompt=prompt)
-    return response['response']  # Changed from 'text' to 'response'
+    return bedrock_generate(prompt)
 
 def analyze_business_logic_flaws(documentation, lang):
     """Analyze documentation to identify potential business logic flaws"""
@@ -104,8 +129,7 @@ def analyze_business_logic_flaws(documentation, lang):
         f"Potential flaws:\n"
     )
     try:
-        response = ollama.generate(model='mistral', prompt=prompt)
-        return response['response'].strip()
+        return bedrock_generate(prompt)
     except Exception as e:
         print(f"Error analyzing business logic flaws: {str(e)}")
         return ""
