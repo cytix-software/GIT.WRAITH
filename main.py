@@ -13,7 +13,7 @@ import traceback
 
 bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
 
-MAX_TOKENS = 200
+MAX_TOKENS = 4096
 
 LANGUAGE_CONFIG = {
     'python': {
