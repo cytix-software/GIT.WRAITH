@@ -2,148 +2,95 @@
 import os
 import sys
 import ollama
+import argparse
+import re
 from tree_sitter import Node
 from tree_sitter_languages import get_parser, get_language
 from pathspec import GitIgnoreSpec
+from typing import Dict, List, Optional
+import json
+import traceback
 
 MAX_TOKENS = 4096  # Adjust based on Mistral's context limit
 
 LANGUAGE_CONFIG = {
     'python': {
         'extensions': ['.py'],
-        'function_nodes': ['function_definition'],
-        'class_nodes': ['class_definition'],
-        'body_node_type': 'block',
-        'comment_syntax': '#'
+        'comment_regex': r'^\s*#',
+        'section_regex': r'^\s*(def|class|async def)\b'
     },
     'javascript': {
-        'extensions': ['.js', '.jsx'],
-        'function_nodes': ['function_declaration', 'method_definition'],
-        'class_nodes': ['class_declaration'],
-        'body_node_type': 'statement_block',
-        'comment_syntax': '//'
-    },
-    'typescript': {
-        'extensions': ['.ts', '.tsx'],
-        'function_nodes': ['function_declaration', 'method_signature', 'method_definition'],
-        'class_nodes': ['class_declaration', 'interface_declaration'],
-        'body_node_type': 'statement_block',
-        'comment_syntax': '//'
-    },
-    'vue': {
-        'extensions': ['.vue'],
-        'function_nodes': ['function_declaration', 'method_definition'],
-        'class_nodes': ['class_declaration'],
-        'body_node_type': 'statement_block',
-        'comment_syntax': '//',
-        'script_tag': 'script_element'  # Special handling for Vue SFCs
+        'extensions': ['.js', '.jsx', '.ts', '.tsx'],
+        'comment_regex': r'^\s*//|^\s*/\*',
+        'section_regex': r'^\s*(function|class|export\s+\w+)\b'
     },
     'java': {
         'extensions': ['.java'],
-        'function_nodes': ['method_declaration'],
-        'class_nodes': ['class_declaration'],
-        'body_node_type': 'block',
-        'comment_syntax': '//'
-    },
-    'c': {
-        'extensions': ['.c', '.h'],
-        'function_nodes': ['function_definition'],
-        'body_node_type': 'compound_statement',
-        'comment_syntax': '//'
-    },
-    'cpp': {
-        'extensions': ['.cpp', '.hpp', '.cxx'],
-        'function_nodes': ['function_definition'],
-        'class_nodes': ['class_specifier'],
-        'body_node_type': 'compound_statement',
-        'comment_syntax': '//'
-    },
-    'ruby': {
-        'extensions': ['.rb'],
-        'function_nodes': ['method'],
-        'class_nodes': ['class'],
-        'body_node_type': 'body_statement',
-        'comment_syntax': '#'
+        'comment_regex': r'^\s*//|^\s*/\*',
+        'section_regex': r'^\s*(public|private|protected|static)?\s*(class|interface|enum)\b'
     },
     'go': {
         'extensions': ['.go'],
-        'function_nodes': ['function_declaration'],
-        'body_node_type': 'block',
-        'comment_syntax': '//'
+        'comment_regex': r'^\s*//',
+        'section_regex': r'^\s*(func|type)\b'
+    },
+    'cpp': {
+        'extensions': ['.cpp', '.hpp', '.cxx', '.hxx'],
+        'comment_regex': r'^\s*//|^\s*/\*',
+        'section_regex': r'^\s*(class|struct|enum|template|namespace)\b'
+    },
+    'csharp': {
+        'extensions': ['.cs'],
+        'comment_regex': r'^\s*//|^\s*/\*',
+        'section_regex': r'^\s*(public|private|protected|internal)?\s*(class|struct|enum|namespace)\b'
+    },
+    'ruby': {
+        'extensions': ['.rb'],
+        'comment_regex': r'^\s*#',
+        'section_regex': r'^\s*(def|class|module)\b'
+    },
+    'php': {
+        'extensions': ['.php'],
+        'comment_regex': r'^\s*//|^\s*#\s*|^\s*/\*',
+        'section_regex': r'^\s*(function|class|trait)\b'
+    },
+    'rust': {
+        'extensions': ['.rs'],
+        'comment_regex': r'^\s*//',
+        'section_regex': r'^\s*(fn|struct|enum|impl|trait)\b'
+    },
+    'swift': {
+        'extensions': ['.swift'],
+        'comment_regex': r'^\s*//',
+        'section_regex': r'^\s*(func|class|struct|enum)\b'
+    },
+    'kotlin': {
+        'extensions': ['.kt'],
+        'comment_regex': r'^\s*//|^\s*/\*',
+        'section_regex': r'^\s*(fun|class|object|interface)\b'
+    },
+    'bash': {
+        'extensions': ['.sh'],
+        'comment_regex': r'^\s*#',
+        'section_regex': r'^\s*(function)\b'
     }
 }
 
-def get_language_config(file_path):
-    """Determine language configuration based on file extension"""
-    ext = os.path.splitext(file_path)[1].lower()
-    for lang, cfg in LANGUAGE_CONFIG.items():
-        if ext in cfg.get('extensions', []):
-            return lang, cfg
-    return None, None
+def get_language_config(enable_langs: Optional[List[str]] = None,
+                      disable_langs: Optional[List[str]] = None) -> Dict:
+    """Return filtered language configuration"""
+    enable_langs = enable_langs or []
+    disable_langs = disable_langs or []
 
-def truncate_code(code, file_path):
-    """Truncate code by removing function/class bodies if too long"""
-    tokens = len(code.split())
-    if tokens <= MAX_TOKENS:
-        return code
-
-    lang, config = get_language_config(file_path)
-    if not lang:
-        return code  # Unsupported language, return original
-
-    try:
-        parser = get_parser(lang)
-        tree = parser.parse(bytes(code, 'utf-8'))
-        root_node = tree.root_node
-        replacements = []
-        placeholder = f"\n{config['comment_syntax']} ... content truncated ...\n".encode()
-
-        # Special handling for Vue Single File Components
-        if lang == 'vue':
-            script_nodes = []
-            def find_script_nodes(node):
-                if node.type == config.get('script_tag', 'script_element'):
-                    script_nodes.append(node)
-                for child in node.children:
-                    find_script_nodes(child)
-            find_script_nodes(root_node)
-            # Only process code inside script tags
-            if script_nodes:
-                root_node = script_nodes[0]
-
-        def walk(node):
-            if node.type in config.get('function_nodes', []) + config.get('class_nodes', []):
-                body_node = None
-                for child in node.children:
-                    if child.type == config['body_node_type']:
-                        body_node = child
-                        break
-                if body_node:
-                    replacements.append((body_node.start_byte, body_node.end_byte))
-            for child in node.children:
-                walk(child)
-
-        walk(root_node)
-
-        # Sort in reverse order to handle nested functions
-        replacements.sort(reverse=True, key=lambda x: x[0])
-
-        code_bytes = bytearray(code.encode('utf-8'))
-        for start, end in replacements:
-            code_bytes[start:end] = placeholder
-
-        truncated_code = code_bytes.decode('utf-8')
-        return truncated_code if len(truncated_code.split()) <= MAX_TOKENS else code
-    except Exception as e:
-        print(f"Truncation error for {file_path}: {str(e)}")
-        return code  # Return original on parsing error
+    if enable_langs:
+        return {k: v for k, v in LANGUAGE_CONFIG.items() if k in enable_langs}
+    return {k: v for k, v in LANGUAGE_CONFIG.items() if k not in disable_langs}
 
 def generate_documentation(code, file_path):
     """Generate documentation using Ollama/Mistral"""
-    lang, _ = get_language_config(file_path)
     prompt = (
-        f"Generate documentation for this {lang} code file. "
-        f"Start with a brief summary, then describe components:\n\n{code}\n\nDocumentation:"
+        f"Generate documentation for this code file. "
+        f"Start with a brief summary, then describe key components:\n\n{code}\n\nDocumentation:"
     )
     response = ollama.generate(model='mistral', prompt=prompt)
     return response['response']  # Changed from 'text' to 'response'
@@ -172,7 +119,49 @@ def get_gitignore_spec(repo_path):
             return GitIgnoreSpec.from_lines(lines)
     return None
 
-def process_repository(repo_path):
+def truncate_code(code: str, max_tokens: int, section_regex: str) -> str:
+    """Intelligent truncation preserving code structure"""
+    lines = code.split('\n')
+    sections = []
+    current_section = []
+
+    for line in lines:
+        if re.match(section_regex, line.lstrip()):
+            if current_section:
+                sections.append(current_section)
+            current_section = [line]
+        else:
+            current_section.append(line)
+    if current_section:
+        sections.append(current_section)
+
+    total_tokens = sum(len(' '.join(sec).split()) for sec in sections)
+    if total_tokens <= max_tokens:
+        return '\n'.join(['\n'.join(sec) for sec in sections])
+
+    kept_sections = []
+    current_tokens = 0
+
+    for sec in sections:
+        sec_tokens = len(' '.join(sec).split())
+        if current_tokens + sec_tokens > max_tokens:
+            break
+        kept_sections.append(sec)
+        current_tokens += sec_tokens
+
+    if current_tokens < max_tokens:
+        remaining = max_tokens - current_tokens
+        for line in sections[len(kept_sections)]:
+            line_tokens = len(line.split())
+            if remaining - line_tokens >= 0:
+                kept_sections.append([line])
+                remaining -= line_tokens
+            else:
+                break
+
+    return '\n'.join(['\n'.join(sec) for sec in kept_sections])
+
+def process_repository(repo_path: str, config: Dict, max_tokens: int):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
     flaws_list = []  # New list to collect flaws
@@ -201,8 +190,10 @@ def process_repository(repo_path):
 
         # Process remaining files
         for file in filtered_files:
+            ext = os.path.splitext(file)[1].lower()
+            lang = next((k for k, v in config.items() if ext in v['extensions']), None)
             file_path = os.path.join(root, file)
-            lang, config = get_language_config(file_path)
+            #lang, config = get_language_config(file_path)
 
             if not lang:
                 continue  # Skip unsupported file types
@@ -213,9 +204,12 @@ def process_repository(repo_path):
             try:
                 with open(file_path, 'r') as f:
                     original_code = f.read()
-                truncated_code = truncate_code(original_code, file_path)
+
+                section_regex = config[lang]['section_regex']
+                truncated_code = truncate_code(original_code, max_tokens, section_regex)
             except Exception as e:
                 print(f"Error reading {file_path}: {str(e)}")
+                traceback.print_exc()
                 continue
 
             # Generate documentation
@@ -236,7 +230,7 @@ def process_repository(repo_path):
             # Save documentation
             try:
                 doc_dir = os.path.dirname(file_path)
-                doc_filename = os.path.splitext(os.path.basename(file_path))[0] + '.docs.md'
+                doc_filename = os.path.basename(file_path) + '.docs.md'
                 doc_path = os.path.join(doc_dir, doc_filename)
 
                 with open(doc_path, 'w') as f:
@@ -274,14 +268,46 @@ def process_repository(repo_path):
     except Exception as e:
         print(f"Error creating business logic flaws report: {str(e)}")
 
+def main():
+    parser = argparse.ArgumentParser(description='Repository Code Processor')
+    parser.add_argument('repo_path', type=str, help='Path to the repository')
+    parser.add_argument('--max-tokens', type=int, default=8000)
+    parser.add_argument('--config-file', type=str)
+    parser.add_argument('--enable-languages', type=str)
+    parser.add_argument('--disable-languages', type=str)
+    args = parser.parse_args()
+
+    # Load configuration
+    config = {}
+    if args.config_file:
+        try:
+            with open(args.config_file, 'r') as f:
+                content = f.read().strip()
+                # Load JSON content, handle empty files, and ensure config is a dictionary
+                config = json.loads(content) if content else {}
+                config = config or {}  # Fallback to empty dict if loaded value is falsy
+        except Exception as e:
+            print(f"Error loading config file: {e}")
+            return
+
+    # Determine language configuration
+    enable_langs = args.enable_languages.split(',') if args.enable_languages else config.get('enable_languages', [])
+    disable_langs = args.disable_languages.split(',') if args.disable_languages else config.get('disable_languages', [])
+
+    language_config = get_language_config(enable_langs, disable_langs)
+
+    # Process repository
+    try:
+        result = process_repository(
+            args.repo_path,
+            language_config,
+            args.max_tokens
+        )
+        print(result)
+    except Exception as e:
+        print(f"Processing failed: {e}")
+        traceback.print_exc()
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: gitwraith <repository_path>")
-        sys.exit(1)
-
-    repo_path = sys.argv[1]
-    if not os.path.isdir(repo_path):
-        print(f"Error: {repo_path} is not a valid directory")
-        sys.exit(1)
-
-    process_repository(repo_path)
+    main()
