@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 import json
 import traceback
 import hashlib
+import bottle
+from server import *
 
 # Initialize Bedrock client for AI model access
 bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
@@ -503,7 +505,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             #remove hashes that are missing from the new_hashes to avoid cruft building up
             for key in hashes.keys():
                 if key not in new_hashes.keys():
-                    del hashe[key]
+                    del hashes[key]
             json.dump(hashes, f, indent=4)
 
     # Generate repository-wide summary document
@@ -533,7 +535,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Repository Code Processor')
-    parser.add_argument('repo_path', type=str, help='Path to the repository')
+    parser.add_argument('repo_path', type=str, nargs='?', default='', help='Path to the repository')
     parser.add_argument('--max-tokens', type=int, default=8000)
     parser.add_argument('--config-file', type=str)
     parser.add_argument('--enable-languages', type=str)
@@ -558,16 +560,20 @@ def main():
 
     language_config = get_language_config(enable_langs, disable_langs)
 
-    # Process the repository
-    try:
-        result = process_repository(
-            args.repo_path,
-            language_config,
-            args.max_tokens
-        )
-    except Exception as e:
-        print(f"Processing failed: {e}")
-        traceback.print_exc()
+    if args.repo_path:
+        # Process the repository
+        try:
+            result = process_repository(
+                args.repo_path,
+                language_config,
+                args.max_tokens
+            )
+        except Exception as e:
+            print(f"Processing failed: {e}")
+            traceback.print_exc()
+
+    # Start HTTP server
+    bottle.run(host='0.0.0.0', port=3000, debug=True, reloader=True)
 
 
 if __name__ == '__main__':
