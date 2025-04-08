@@ -134,7 +134,7 @@ def compute_file_hash(filepath, algorithm='sha256', max_size=10 * 1024 * 1024, s
 
     return hasher.hexdigest()
 
-def get_changed_files(repo_path, file_list, json_hashes_path, algorithm='sha256',
+def compute_cache(repo_path, file_list, json_hashes_path, algorithm='sha256',
                                  max_size=10 * 1024 * 1024, sample_size=64 * 1024):
     """
     Checks a list of files against a stored JSON of hashes. Returns only those files
@@ -154,14 +154,14 @@ def get_changed_files(repo_path, file_list, json_hashes_path, algorithm='sha256'
     # Load previous hashes if available
     try:
         with open(json_hashes_path, 'r') as f:
-            stored_hashes = json.load(f)
+            stored_cache = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        stored_hashes = {}
+        stored_cache = {}
 
     # Determine if we should consider all files changed
-    full_run = not stored_hashes or len(stored_hashes) == 0
+    full_run = not stored_cache or not stored_cache['hashes'] or len(stored_cache['hashes']) == 0
 
-    new_hashes = {}
+    new_cache = {}
     changed_files = []
 
     for filepath in file_list:
@@ -171,12 +171,16 @@ def get_changed_files(repo_path, file_list, json_hashes_path, algorithm='sha256'
 
         new_hash = compute_file_hash(full_path, algorithm=algorithm,
                                      max_size=max_size, sample_size=sample_size)
-        new_hashes[filepath] = new_hash
+        if 'hashes' not in new_cache.keys():
+            new_cache['hashes'] = {}
+        if 'summaries' not in new_cache.keys():
+            new_cache['summaries'] = {}
+        new_cache['hashes'][filepath] = new_hash
         # If a full run (no previous hashes) or if the file is new/changed, add to changed list.
-        if full_run or stored_hashes.get(filepath) != new_hash:
+        if full_run or stored_cache['hashes'].get(filepath) != new_hash:
             changed_files.append(filepath)
 
-    return changed_files,new_hashes
+    return changed_files,new_cache
 
 def bedrock_generate(prompt: str, model_id='mistral.mixtral-8x7b-instruct-v0:1') -> str:
     """Generate text using AWS Bedrock AI model"""
@@ -405,7 +409,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
 
     cache_path = os.path.join(repo_path, '.wraith.cache.json')
-    changed_files,new_hashes = get_changed_files(repo_path, filtered_files, cache_path)
+    changed_files,new_cache = compute_cache(repo_path, filtered_files, cache_path)
     # Process remaining files
     for repo_file_path in filtered_files:
         file_path = os.path.join(repo_path, repo_file_path)
@@ -429,6 +433,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             traceback.print_exc()
             continue
 
+        summary = ""
         if repo_file_path in changed_files:
             print("File has changed since last run, regenerating documentation")
             # Generate documentation
@@ -444,6 +449,10 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
                     with open(doc_path, 'w') as f:
                         f.write(f"# {lang.capitalize()} Code Documentation\n")
                         f.write(doc)
+
+                    # Extract summary (first paragraph)
+                    summary = generate_summary(doc)
+                    summaries.append((file_path, summary))
                 except Exception as e:
                     print(f"Error saving documentation for {file_path}: {str(e)}")
                     continue
@@ -454,26 +463,35 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             with open(file_path, 'r') as f:
                 doc = f.read()
 
-        # Extract summary (first paragraph)
-        summary = generate_summary(doc)#doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
-        print("Summary:", summary)
-        summaries.append((file_path, summary))
-
         try:
             with open(cache_path, 'r') as f:
-                hashes = json.load(f)
+                cache = json.load(f)
+                if 'hashes' not in cache.keys():
+                    cache['hashes'] = {}
+                if 'summaries' not in cache.keys():
+                    cache['summaries'] = {}
+
+                #if not repo_file_path in changed_files:
+                #    cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
         except (FileNotFoundError, json.JSONDecodeError):
-            hashes = {}
+            cache = {
+                'hashes': {},
+                'summaries': {}
+            }
 
         with open(cache_path, 'w') as f:
             f.truncate(0)
             f.seek(0)
-            hashes[repo_file_path] = new_hashes[repo_file_path]
-            #remove hashes that are missing from the new_hashes to avoid cruft building up
-            for key in hashes.keys():
-                if key not in new_hashes.keys():
-                    del hashes[key]
-            json.dump(hashes, f, indent=4)
+
+            cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
+            if summary != "":
+                cache['summaries'][repo_file_path] = summary
+            #remove paths that are missing from the cache to avoid cruft building up
+            for path in cache['hashes'].keys():
+                if path not in new_cache['hashes'].keys():
+                    del cache['hashes'][key]
+                    del cache['summaries'][key]
+            json.dump(cache, f, indent=4)
 
     # Generate repository-wide summary document
     try:
