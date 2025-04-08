@@ -156,12 +156,18 @@ def compute_cache(repo_path, file_list, json_hashes_path, algorithm='sha256',
         with open(json_hashes_path, 'r') as f:
             stored_cache = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        stored_cache = {}
+        stored_cache = {'hashes': {}, 'summaries': {}}
+
+    # Ensure stored_cache has the required structure
+    if 'hashes' not in stored_cache:
+        stored_cache['hashes'] = {}
+    if 'summaries' not in stored_cache:
+        stored_cache['summaries'] = {}
 
     # Determine if we should consider all files changed
     full_run = not stored_cache or not stored_cache['hashes'] or len(stored_cache['hashes']) == 0
 
-    new_cache = {}
+    new_cache = {'hashes': {}, 'summaries': {}}
     changed_files = []
 
     for filepath in file_list:
@@ -171,21 +177,24 @@ def compute_cache(repo_path, file_list, json_hashes_path, algorithm='sha256',
 
         new_hash = compute_file_hash(full_path, algorithm=algorithm,
                                      max_size=max_size, sample_size=sample_size)
-        if 'hashes' not in new_cache.keys():
-            new_cache['hashes'] = {}
-        if 'summaries' not in new_cache.keys():
-            new_cache['summaries'] = {}
         new_cache['hashes'][filepath] = new_hash
         # If a full run (no previous hashes) or if the file is new/changed, add to changed list.
         if full_run or stored_cache['hashes'].get(filepath) != new_hash:
             changed_files.append(filepath)
 
-    return changed_files,new_cache
+    return changed_files, new_cache
 
-def bedrock_generate(prompt: str, model_id='mistral.mixtral-8x7b-instruct-v0:1') -> str:
+def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v1:0') -> str:
     """Generate text using AWS Bedrock AI model"""
     body = {
-        "prompt": f"<s>[INST] {prompt} [/INST]",
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 4096,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
         "temperature": 0.2,
         "top_k": 20,
         "top_p": 0.8
@@ -201,7 +210,7 @@ def bedrock_generate(prompt: str, model_id='mistral.mixtral-8x7b-instruct-v0:1')
     try:
         raw = response['body'].read().decode('utf-8')
         data = json.loads(raw)
-        return data['outputs'][0]['text'].strip()
+        return data['content'][0]['text'].strip()
     except Exception as e:
         print("Error parsing Bedrock response:", str(e))
         return ""
@@ -257,25 +266,124 @@ def generate_summary(documentation):
 # Input: documentation (str) - documentation to analyze, lang (str) - programming language
 # Output: str - numbered list of identified potential flaws with descriptions
 def generate_threat_model(summary):
-    """Generate a comprehensive application security threat model based on code documentation"""
+    """Generate a security-focused threat model diagram using mermaid.js"""
     prompt = (
-        f"<s><instructions> You are an expert application security penetration tester and threat modeler. "
-        f"Based on the following documentation for a codebase, create a simple application security threat model \n\n"
-        f"Target the following key areas:\n\n"
-        f"   - Key functionality and features\n"
-        f"   - Data Flow\n"
-        f"   - External Integrations and APIs\n\n"
-        f"   - Application Threat Model:\n\n"
-        f"Where function names and other code elements are used you should use code formatting in markdown"
-        f"Format your response in clear, well-structured markdown. Be as concise as possible, keep to a single paragraph."
-        f"<documentation>\n{summary}\n</documentation>\n"
-        f"Application Security Threat Model:"
+        f"<s>You are an expert security architect. Create a threat model diagram based on the provided documentation.\n\n"
+        f"Requirements:\n"
+        f"1. Use mermaid.js flowchart TD syntax\n"
+        f"2. Node types:\n"
+        f"   - ((name)) for external entities/users\n"
+        f"   - [name] for internal processes\n"
+        f"   - [(name)] for data stores\n"
+        f"   - {{{{name}}}} for security controls\n"
+        f"   - >name] for outputs\n\n"
+        f"3. Data Flow Labels MUST:\n"
+        f"   - Use EXACT data types/objects from the code (e.g., 'JiraTicket', 'UserCredentials')\n"
+        f"   - Include specific operations (e.g., 'POST /api/tickets', 'GET /users/{{id}}')\n"
+        f"   - Show state changes (e.g., 'Raw JiraTicket → Validated JiraTicket')\n"
+        f"   - Use actual field names and types from the documentation\n\n"
+        f"4. Trust Boundaries:\n"
+        f"   - Use subgraphs with descriptive names based on actual system zones\n"
+        f"   - Label cross-boundary data flows with specific protocols/methods\n\n"
+        f"Example structure (using specific data types):\n"
+        f"```mermaid\n"
+        f"flowchart TD\n"
+        f"    %% Styles\n"
+        f"    classDef user fill:#fdd,stroke:#333,stroke-width:2px\n"
+        f"    classDef process fill:#ddf,stroke:#333,stroke-width:2px\n"
+        f"    classDef storage fill:#dfd,stroke:#333,stroke-width:2px\n"
+        f"    classDef control fill:#fff,stroke:#f66,stroke-width:3px\n"
+        f"    classDef external fill:#fdb,stroke:#333,stroke-width:2px\n"
+        f"    \n"
+        f"    %% Trust Boundaries\n"
+        f"    subgraph ClientZone[Browser Context]\n"
+        f"        User((Customer))\n"
+        f"        Browser[Web Client]\n"
+        f"    end\n"
+        f"    \n"
+        f"    subgraph APIZone[API Context]\n"
+        f"        Auth{{{{JWT Validation}}}}\n"
+        f"        API[Order Service]\n"
+        f"        DB[(Order Database)]\n"
+        f"    end\n"
+        f"    \n"
+        f"    %% Data Flows with Specific Types\n"
+        f"    User -->|CustomerCredentials| Browser\n"
+        f"    Browser -->|POST /auth {{username, password}}| Auth\n"
+        f"    Auth -->|ValidatedSession {{user_id, roles}}| API\n"
+        f"    API -->|INSERT OrderRecord {{id, items: array, total}}| DB\n"
+        f"    DB -->|SELECT OrderDetails| API\n"
+        f"    API -->|OrderConfirmation {{order_id, status}}| Browser\n"
+        f"    \n"
+        f"    %% Apply styles\n"
+        f"    class User user\n"
+        f"    class Auth control\n"
+        f"    class API process\n"
+        f"    class DB storage\n"
+        f"    class Browser process\n"
+        f"```\n\n"
+        f"IMPORTANT:\n"
+        f"1. Extract SPECIFIC data types and fields from the documentation\n"
+        f"2. Use ACTUAL API endpoints and methods\n"
+        f"3. Show REAL data transformations between components\n"
+        f"4. Label boundaries based on ACTUAL system architecture\n"
+        f"5. Include only components and flows from documentation\n"
+        f"6. Make data flow labels as specific as possible\n"
+        f"7. Return ONLY the mermaid.js diagram\n\n"
+        f"Documentation to analyze:\n{summary}\n"
+        f"[/INST]"
     )
+    
     try:
-        return bedrock_generate(prompt)
+        diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
+        
+        if "```mermaid" in diagram:
+            diagram = diagram[diagram.find("```mermaid"):diagram.rfind("```")]
+            diagram = diagram.replace("```mermaid", "").replace("```", "").strip()
+        
+        # Ensure the diagram has the required elements
+        required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
+        if not all(x in diagram for x in required_elements):
+            raise ValueError("Invalid diagram structure")
+                
+        return diagram
+        
     except Exception as e:
-        print(f"Error generating application security threat model: {str(e)}")
-        return ""
+        print(f"Error generating threat model diagram: {str(e)}")
+        return """flowchart TD
+    %% Styles
+    classDef user fill:#fdd,stroke:#333,stroke-width:2px
+    classDef process fill:#ddf,stroke:#333,stroke-width:2px
+    classDef storage fill:#dfd,stroke:#333,stroke-width:2px
+    classDef control fill:#fff,stroke:#f66,stroke-width:3px
+    classDef external fill:#fdb,stroke:#333,stroke-width:2px
+    
+    %% Trust Boundaries
+    subgraph ClientZone[Browser Context]
+        User((Customer))
+        Browser[Web Client]
+    end
+    
+    subgraph APIZone[API Context]
+        Auth{{JWT Validation}}
+        API[Order Service]
+        DB[(Order Database)]
+    end
+    
+    %% Data Flows with Specific Types
+    User -->|CustomerCredentials| Browser
+    Browser -->|POST /auth {{username, password}}| Auth
+    Auth -->|ValidatedSession {{user_id, roles}}| API
+    API -->|INSERT OrderRecord {{id, items: array, total}}| DB
+    DB -->|SELECT OrderDetails| API
+    API -->|OrderConfirmation {{order_id, status}}| Browser
+    
+    %% Apply styles
+    class User user
+    class Auth control
+    class API process
+    class DB storage
+    class Browser process"""
 
 def get_gitignore_spec(repo_path):
     """Load .gitignore patterns into a GitIgnoreSpec"""
@@ -381,36 +489,34 @@ def should_ignore_file(file_path: str) -> bool:
 def process_repository(repo_path: str, config: Dict, max_tokens: int):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
-    flaws_list = []  # List to collect identified flaws
+    doc_contents = []  # Store full documentation content
     spec = get_gitignore_spec(repo_path)
+    
     # Filter out ignored files
     filtered_files = []
     for root, dirs, files in os.walk(repo_path, topdown=True):
-        # Skip ignored directories
         rel_dir = os.path.relpath(root, repo_path).replace('\\', '/')
         if spec:
             dir_ignored = spec.match_file(rel_dir) or spec.match_file(f"{rel_dir}/")
             if dir_ignored:
-                dirs[:] = []  # Skip subdirectories
-                continue  # Skip processing files in this directory
-
+                dirs[:] = []
+                continue
 
         for file in files:
             file_path = os.path.join(root, file)
             rel_path = os.path.relpath(file_path, repo_path).replace('\\', '/')
 
-            # Skip files based on .gitignore
             if spec and spec.match_file(rel_path):
                 continue
 
-            # Skip common installation and third-party files
             if should_ignore_file(rel_path):
                 continue
 
             filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
 
     cache_path = os.path.join(repo_path, '.wraith.cache.json')
-    changed_files,new_cache = compute_cache(repo_path, filtered_files, cache_path)
+    changed_files, new_cache = compute_cache(repo_path, filtered_files, cache_path)
+    
     # Process remaining files
     for repo_file_path in filtered_files:
         file_path = os.path.join(repo_path, repo_file_path)
@@ -418,11 +524,10 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         lang = next((k for k, v in config.items() if ext in v['extensions']), None)
 
         if not lang:
-            continue  # Skip unsupported file types
+            continue
 
         print(f"Processing: {file_path}")
 
-        # Read and truncate code to fit token limit
         try:
             with open(file_path, 'r') as f:
                 original_code = f.read()
@@ -435,85 +540,87 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             continue
 
         summary = ""
+        doc = ""
+        doc_path = os.path.join(os.path.dirname(file_path), os.path.basename(file_path) + '.docs.md')
+        
         if repo_file_path in changed_files:
             print("File has changed since last run, regenerating documentation")
-            # Generate documentation
             try:
                 doc = generate_documentation(truncated_code, file_path)
+                
+                os.makedirs(os.path.dirname(doc_path), exist_ok=True)
+                
+                with open(doc_path, 'w') as f:
+                    f.write(f"# {lang.capitalize()} Code Documentation\n")
+                    f.write(doc)
 
-                # Save documentation
-                try:
-                    doc_dir = os.path.dirname(file_path)
-                    doc_filename = os.path.basename(file_path) + '.docs.md'
-                    doc_path = os.path.join(doc_dir, doc_filename)
-
-                    with open(doc_path, 'w') as f:
-                        f.write(f"# {lang.capitalize()} Code Documentation\n")
-                        f.write(doc)
-
-                    # Extract summary (first paragraph)
-                    summary = generate_summary(doc)
-                    summaries.append((file_path, summary))
-                except Exception as e:
-                    print(f"Error saving documentation for {file_path}: {str(e)}")
-                    continue
+                summary = generate_summary(doc)
+                summaries.append((file_path, summary))
+                doc_contents.append((file_path, doc))
             except Exception as e:
-                print(f"Documentation generation failed for {file_path}: {str(e)}")
+                print(f"Error generating documentation for {file_path}: {str(e)}")
                 continue
         else:
-            with open(file_path, 'r') as f:
-                doc = f.read()
+            try:
+                if os.path.exists(doc_path):
+                    with open(doc_path, 'r') as f:
+                        doc = f.read()
+                    summary = generate_summary(doc)
+                    summaries.append((file_path, summary))
+                    doc_contents.append((file_path, doc))
+            except Exception as e:
+                print(f"Error reading existing documentation for {file_path}: {str(e)}")
+                continue
 
         try:
             with open(cache_path, 'r') as f:
                 cache = json.load(f)
-                if 'hashes' not in cache.keys():
-                    cache['hashes'] = {}
-                if 'summaries' not in cache.keys():
-                    cache['summaries'] = {}
-
-                #if not repo_file_path in changed_files:
-                #    cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
         except (FileNotFoundError, json.JSONDecodeError):
-            cache = {
-                'hashes': {},
-                'summaries': {}
-            }
+            cache = {'hashes': {}, 'summaries': {}}
+
+        if 'hashes' not in cache:
+            cache['hashes'] = {}
+        if 'summaries' not in cache:
+            cache['summaries'] = {}
+
+        cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
+        if summary:
+            cache['summaries'][repo_file_path] = summary
+
+        for path in list(cache['hashes'].keys()):
+            if path not in new_cache['hashes']:
+                del cache['hashes'][path]
+                if path in cache['summaries']:
+                    del cache['summaries'][path]
 
         with open(cache_path, 'w') as f:
-            f.truncate(0)
-            f.seek(0)
-
-            cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
-            if summary != "":
-                cache['summaries'][repo_file_path] = summary
-            #remove paths that are missing from the cache to avoid cruft building up
-            for path in cache['hashes'].keys():
-                if path not in new_cache['hashes'].keys():
-                    del cache['hashes'][key]
-                    del cache['summaries'][key]
             json.dump(cache, f, indent=4)
 
-    # Generate repository-wide summary document
     try:
         summary_path = os.path.join(repo_path, 'summary.docs.md')
         with open(summary_path, 'w') as f:
             f.write("# Repository Overview\n\n")
             for path, summary in summaries:
                 rel_path = os.path.relpath(path, repo_path).replace('\\', '/')
-                f.write(f"- **{rel_path}**: {summary}\n")
+                f.write(f"## {rel_path}\n\n{summary}\n\n")
+                f.write("### Detailed Documentation\n\n")
+                for doc_path, doc in doc_contents:
+                    if doc_path == path:
+                        f.write(f"{doc}\n\n")
     except Exception as e:
         print(f"Error creating summary: {str(e)}")
 
-    # Generate business logic analysis report
-    flaws_report_path = os.path.join(repo_path, 'logic-flaws.analysis.md')
-
+    # Generate data flow diagram
+    diagram_path = os.path.join(repo_path, 'system-dataflow.mmd')
     try:
-        with open(flaws_report_path, 'w') as f:
-            f.write(generate_threat_model(". ".join([f"Path: {path}, summary: {summary}" for path, summary in summaries])))
-
+        # Generate the diagram using the comprehensive documentation
+        diagram = generate_threat_model(". ".join([f"Path: {path}, summary: {summary}" for path, summary in summaries]))
+        
+        # Write only the raw mermaid diagram to the file
+        with open(diagram_path, 'w') as f:
+            f.write(diagram)
     except Exception as e:
-        print(f"Error creating business logic flaws report: {str(e)}")
+        print(f"Error creating data flow diagram: {str(e)}")
 
 def main():
     # Parse command line arguments
