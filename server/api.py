@@ -1,4 +1,5 @@
 from bottle import route, request, response, get, post
+from github import get_repo
 
 @route('/api')
 def healthCheck():
@@ -14,7 +15,8 @@ def scan():
     response.status = 400
     return { 'status': response.status, 'message': 'Bad Request - parameter repo_url is required.' }
 
-  # TODO: find a way to turn a URL for a github project into actual file contents to feed into the process_repository function
+  # Attempt to retrieve files from github URL
+  files = get_repo(repo_url)
 
   from main import process_repository, LANGUAGE_CONFIG, MAX_TOKENS
   try:

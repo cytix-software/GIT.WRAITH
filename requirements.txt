@@ -5,3 +5,4 @@ tree_sitter_languages
 pathspec
 boto3
 bottle
+gitpython
