@@ -12,10 +12,17 @@ import json
 import traceback
 import hashlib
 
+# Initialize Bedrock client for AI model access
 bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
 
+# Maximum tokens allowed for code analysis
 MAX_TOKENS = 4096
 
+# Configuration for different programming languages
+# Each language specifies:
+# - File extensions
+# - Comment pattern regex
+# - Section/block pattern regex (functions, classes etc)
 LANGUAGE_CONFIG = {
     'python': {
         'extensions': ['.py'],
@@ -170,6 +177,7 @@ def get_changed_files(repo_path, file_list, json_hashes_path, algorithm='sha256'
     return changed_files,new_hashes
 
 def bedrock_generate(prompt: str, model_id='mistral.mixtral-8x7b-instruct-v0:1') -> str:
+    """Generate text using AWS Bedrock AI model"""
     body = {
         "prompt": f"<s>[INST] {prompt} [/INST]",
         "temperature": 0.5,
@@ -203,26 +211,89 @@ def get_language_config(enable_langs: Optional[List[str]] = None,
         return {k: v for k, v in LANGUAGE_CONFIG.items() if k in enable_langs}
     return {k: v for k, v in LANGUAGE_CONFIG.items() if k not in disable_langs}
 
+# Generates comprehensive documentation for a given code file using AWS Bedrock AI.
+# The documentation includes a brief summary, description of key components,
+# and overview of important classes, functions, and their relationships.
+# Input: code (str) - source code to document, file_path (str) - path to source file
+# Output: str - generated documentation in markdown format
 def generate_documentation(code, file_path):
     """Generate documentation using Bedrock"""
     prompt = (
-        f"Generate documentation for this code file. "
-        f"Start with a brief summary, then describe key components:\n\n{code}\n\nDocumentation:"
+        f"<s>[INST] You are an expert software engineer and technical writer. "
+        f"Your task is to analyze the following code and generate comprehensive documentation.\n\n"
+        f"Code:\n{code}\n\n"
+        f"Please provide:\n"
+        f"1. A high-level overview of the code's purpose and functionality\n"
+        f"2. Detailed description of key components, classes, and functions\n"
+        f"3. Explanation of important algorithms, data structures, or patterns used\n"
+        f"4. Any security considerations or potential vulnerabilities\n"
+        f"5. Dependencies and integration points with other systems\n\n"
+        f"Format your response in clear, well-structured markdown. "
+        f"Use appropriate headings, code blocks, and bullet points for readability. "
+        f"Focus on making the documentation useful for both developers and security engineers.\n\n"
+        f"Documentation: [/INST]"
     )
     return bedrock_generate(prompt)
 
-def analyze_business_logic_flaws(documentation, lang):
-    """Analyze documentation to identify potential business logic flaws"""
+# Analyzes code documentation to identify potential business logic issues and vulnerabilities.
+# Identifies issues like inconsistent error handling, missing edge cases,
+# potential race conditions, security vulnerabilities, and business rule violations.
+# Input: documentation (str) - documentation to analyze, lang (str) - programming language
+# Output: str - numbered list of identified potential flaws with descriptions
+def generate_threat_model(documentation, lang):
+    """Generate a comprehensive application security threat model based on code documentation"""
     prompt = (
-        f"Based on the documentation of a {lang} code file, identify potential business logic flaws. "
-        f"List each flaw with a brief description using numbered list format:\n\n"
+        f"<s>[INST] You are an expert application security penetration tester and threat modeler. "
+        f"Based on the following documentation for a {lang} codebase, create a detailed application security threat model "
+        f"from an attacker's perspective.\n\n"
         f"Documentation:\n{documentation}\n\n"
-        f"Potential flaws:\n"
+        f"Create an application security focused threat model following these guidelines:\n\n"
+        f"1. Application Overview:\n"
+        f"   - Key application functionality and features\n"
+        f"   - User roles and privilege levels\n"
+        f"   - Authentication and authorization mechanisms\n"
+        f"   - Data processing flows\n"
+        f"   - External integrations and APIs\n\n"
+        f"2. Attack Surface Analysis:\n"
+        f"   - User input points (forms, APIs, file uploads)\n"
+        f"   - Session management mechanisms\n"
+        f"   - State transitions and business workflows\n"
+        f"   - Data storage and retrieval points\n"
+        f"   - Integration points with external systems\n\n"
+        f"3. Attack Scenarios:\n"
+        f"   IMPORTANT: Only identify attack scenarios where there is clear evidence in the documentation.\n"
+        f"   Focus on how an attacker could exploit the application's functionality.\n"
+        f"   For each identified attack scenario, provide:\n"
+        f"   - Specific application functionality that could be exploited\n"
+        f"   - Step-by-step attack path from an attacker's perspective\n"
+        f"   - Required attacker position (authenticated/unauthenticated)\n"
+        f"   - Technical prerequisites for the attack\n"
+        f"   - Potential impact on the application or its users\n\n"
+        f"4. Security Weaknesses:\n"
+        f"   - Document exploitable application behaviors\n"
+        f"   - Identify security mechanism bypasses\n"
+        f"   - Note any insufficient validation or sanitization\n"
+        f"   - Point out trust assumptions that could be violated\n\n"
+        f"5. Attack Testing Guide:\n"
+        f"   - Specific payloads or techniques to test each attack scenario\n"
+        f"   - Tools useful for exploiting identified weaknesses\n"
+        f"   - Custom scripts or modifications needed\n"
+        f"   - Tips for bypassing existing security controls\n\n"
+        f"6. Impact Assessment:\n"
+        f"   - Exploitability rating for each attack scenario\n"
+        f"   - Potential business and user impact\n"
+        f"   - Attack complexity assessment\n"
+        f"   - Detection likelihood\n\n"
+        f"Format your response in clear, well-structured markdown. "
+        f"Make the threat model practical for security testers to use as an attack guide.\n"
+        f"IMPORTANT: Focus only on realistic application security threats that an attacker could exploit.\n"
+        f"Base all attack scenarios on actual application functionality evident in the documentation.\n\n"
+        f"Application Security Threat Model: [/INST]"
     )
     try:
         return bedrock_generate(prompt)
     except Exception as e:
-        print(f"Error analyzing business logic flaws: {str(e)}")
+        print(f"Error generating application security threat model: {str(e)}")
         return ""
 
 def get_gitignore_spec(repo_path):
@@ -240,6 +311,7 @@ def truncate_code(code: str, max_tokens: int, section_regex: str) -> str:
     sections = []
     current_section = []
 
+    # Group code into logical sections based on regex pattern
     for line in lines:
         if re.match(section_regex, line.lstrip()):
             if current_section:
@@ -250,10 +322,12 @@ def truncate_code(code: str, max_tokens: int, section_regex: str) -> str:
     if current_section:
         sections.append(current_section)
 
+    # Check if truncation is needed
     total_tokens = sum(len(' '.join(sec).split()) for sec in sections)
     if total_tokens <= max_tokens:
         return '\n'.join(['\n'.join(sec) for sec in sections])
 
+    # Truncate while preserving complete sections where possible
     kept_sections = []
     current_tokens = 0
 
@@ -264,6 +338,7 @@ def truncate_code(code: str, max_tokens: int, section_regex: str) -> str:
         kept_sections.append(sec)
         current_tokens += sec_tokens
 
+    # Try to include partial sections with remaining tokens
     if current_tokens < max_tokens:
         remaining = max_tokens - current_tokens
         for line in sections[len(kept_sections)]:
@@ -276,15 +351,61 @@ def truncate_code(code: str, max_tokens: int, section_regex: str) -> str:
 
     return '\n'.join(['\n'.join(sec) for sec in kept_sections])
 
+def should_ignore_file(file_path: str) -> bool:
+    """
+    Determines if a file should be ignored based on common patterns for installation
+    and third-party files.
+
+    Args:
+        file_path (str): The path to the file to check
+
+    Returns:
+        bool: True if the file should be ignored, False otherwise
+    """
+    # Common installation and setup files
+    setup_files = {
+        'setup.py', 'setup.cfg', 'setup.sh', 'install.sh', 'requirements.txt',
+        'Pipfile', 'Pipfile.lock', 'package.json', 'package-lock.json',
+        'yarn.lock', 'composer.json', 'composer.lock', 'Gemfile', 'Gemfile.lock'
+    }
+
+    # Common virtual environment and dependency directories
+    venv_dirs = {
+        'venv', '.venv', 'env', '.env', 'node_modules', 'vendor',
+        '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'
+    }
+
+    # Get the filename and directory components
+    filename = os.path.basename(file_path)
+    dir_parts = file_path.split(os.sep)
+
+    # Check if it's a setup file
+    if filename in setup_files:
+        return True
+
+    # Check if it's in a virtual environment or dependency directory
+    if any(venv_dir in dir_parts for venv_dir in venv_dirs):
+        return True
+
+    # Check for common build and distribution directories
+    if 'dist' in dir_parts or 'build' in dir_parts:
+        return True
+
+    # Check for common IDE and editor files
+    if filename.startswith('.') and filename not in ['.gitignore', '.env.example']:
+        return True
+
+    return False
+
 def process_repository(repo_path: str, config: Dict, max_tokens: int):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
-    flaws_list = []  # New list to collect flaws
+    flaws_list = []  # List to collect identified flaws
     spec = get_gitignore_spec(repo_path)
-
+    # Filter out ignored files
     filtered_files = []
     for root, dirs, files in os.walk(repo_path, topdown=True):
-        # Check if current directory is ignored (handle directory patterns with/without trailing slash)
+        # Skip ignored directories
         rel_dir = os.path.relpath(root, repo_path).replace('\\', '/')
         if spec:
             dir_ignored = spec.match_file(rel_dir) or spec.match_file(f"{rel_dir}/")
@@ -292,13 +413,17 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
                 dirs[:] = []  # Skip subdirectories
                 continue  # Skip processing files in this directory
 
-        # Filter files using .gitignore
+
         for file in files:
             file_path = os.path.join(root, file)
             rel_path = os.path.relpath(file_path, repo_path).replace('\\', '/')
 
-            # Skip ignored files
+            # Skip files based on .gitignore
             if spec and spec.match_file(rel_path):
+                continue
+
+            # Skip common installation and third-party files
+            if should_ignore_file(rel_path):
                 continue
 
             filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
@@ -316,7 +441,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
 
         print(f"Processing: {file_path}")
 
-        # Read and truncate code
+        # Read and truncate code to fit token limit
         try:
             with open(file_path, 'r') as f:
                 original_code = f.read()
@@ -328,37 +453,37 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             traceback.print_exc()
             continue
 
-        # Generate documentation
-        try:
-            doc = generate_documentation(truncated_code, file_path)
-        except Exception as e:
-            print(f"Documentation generation failed for {file_path}: {str(e)}")
-            continue
+            # Generate documentation
+            try:
+                doc = generate_documentation(truncated_code, file_path)
+            except Exception as e:
+                print(f"Documentation generation failed for {file_path}: {str(e)}")
+                continue
 
-        # Analyze for business logic flaws
-        try:
-            flaws = analyze_business_logic_flaws(doc, lang)
-            if flaws.strip():
-                flaws_list.append((file_path, flaws))
-        except Exception as e:
-            print(f"Flaw analysis failed for {file_path}: {str(e)}")
+            # Analyze for business logic flaws
+            try:
+                flaws = generate_threat_model(doc, lang)
+                if flaws.strip():
+                    flaws_list.append((file_path, flaws))
+            except Exception as e:
+                print(f"Threat model generation failed for {file_path}: {str(e)}")
 
-        # Save documentation
-        try:
-            doc_dir = os.path.dirname(file_path)
-            doc_filename = os.path.basename(file_path) + '.docs.md'
-            doc_path = os.path.join(doc_dir, doc_filename)
+            # Save documentation
+            try:
+                doc_dir = os.path.dirname(file_path)
+                doc_filename = os.path.basename(file_path) + '.docs.md'
+                doc_path = os.path.join(doc_dir, doc_filename)
 
-            with open(doc_path, 'w') as f:
-                f.write(f"# {lang.capitalize()} Code Documentation\n")
-                f.write(doc)
-        except Exception as e:
-            print(f"Error saving documentation for {file_path}: {str(e)}")
-            continue
+                with open(doc_path, 'w') as f:
+                    f.write(f"# {lang.capitalize()} Code Documentation\n")
+                    f.write(doc)
+            except Exception as e:
+                print(f"Error saving documentation for {file_path}: {str(e)}")
+                continue
 
-        # Extract summary (first paragraph)
-        summary = doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
-        summaries.append((file_path, summary))
+            # Extract summary (first paragraph)
+            summary = doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
+            summaries.append((file_path, summary))
 
         try:
             with open(cache_path, 'r') as f:
@@ -372,7 +497,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             hashes[repo_file_path] = new_hashes[repo_file_path]
             json.dump(hashes, f, indent=4)
 
-    # Generate top-level summary
+    # Generate repository-wide summary document
     try:
         summary_path = os.path.join(repo_path, 'summary.docs.md')
         with open(summary_path, 'w') as f:
@@ -383,7 +508,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
     except Exception as e:
         print(f"Error creating summary: {str(e)}")
 
-    # Generate business logic flaws report
+    # Generate business logic analysis report
     flaws_report_path = os.path.join(repo_path, 'logic-flaws.analysis.md')
     try:
         with open(flaws_report_path, 'w') as f:
@@ -397,6 +522,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         print(f"Error creating business logic flaws report: {str(e)}")
 
 def main():
+    # Parse command line arguments
     parser = argparse.ArgumentParser(description='Repository Code Processor')
     parser.add_argument('repo_path', type=str, help='Path to the repository')
     parser.add_argument('--max-tokens', type=int, default=8000)
@@ -405,26 +531,25 @@ def main():
     parser.add_argument('--disable-languages', type=str)
     args = parser.parse_args()
 
-    # Load configuration
+    # Load custom configuration if provided
     config = {}
     if args.config_file:
         try:
             with open(args.config_file, 'r') as f:
                 content = f.read().strip()
-                # Load JSON content, handle empty files, and ensure config is a dictionary
                 config = json.loads(content) if content else {}
-                config = config or {}  # Fallback to empty dict if loaded value is falsy
+                config = config or {}  # Fallback to empty dict if loaded value is false
         except Exception as e:
             print(f"Error loading config file: {e}")
             return
 
-    # Determine language configuration
+    # Set up language processing configuration
     enable_langs = args.enable_languages.split(',') if args.enable_languages else config.get('enable_languages', [])
     disable_langs = args.disable_languages.split(',') if args.disable_languages else config.get('disable_languages', [])
 
     language_config = get_language_config(enable_langs, disable_langs)
 
-    # Process repository
+    # Process the repository
     try:
         result = process_repository(
             args.repo_path,
