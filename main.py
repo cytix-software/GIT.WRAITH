@@ -195,7 +195,6 @@ def bedrock_generate(prompt: str, model_id='mistral.mixtral-8x7b-instruct-v0:1')
     try:
         raw = response['body'].read().decode('utf-8')
         data = json.loads(raw)
-        print(json.dumps(data, indent=2))
         return data['outputs'][0]['text'].strip()
     except Exception as e:
         print("Error parsing Bedrock response:", str(e))
@@ -431,7 +430,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
     cache_path = os.path.join(repo_path, '.wraith.cache.json')
     changed_files,new_hashes = get_changed_files(repo_path, filtered_files, cache_path)
     # Process remaining files
-    for repo_file_path in changed_files:
+    for repo_file_path in filtered_files:
         file_path = os.path.join(repo_path, repo_file_path)
         ext = os.path.splitext(file_path)[-1].lower()
         lang = next((k for k, v in config.items() if ext in v['extensions']), None)
@@ -453,37 +452,43 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             traceback.print_exc()
             continue
 
+        if repo_file_path in changed_files:
+            print("File has changed since last run, regenerating documentation")
             # Generate documentation
             try:
                 doc = generate_documentation(truncated_code, file_path)
+
+                # Save documentation
+                try:
+                    doc_dir = os.path.dirname(file_path)
+                    doc_filename = os.path.basename(file_path) + '.docs.md'
+                    doc_path = os.path.join(doc_dir, doc_filename)
+
+                    with open(doc_path, 'w') as f:
+                        f.write(f"# {lang.capitalize()} Code Documentation\n")
+                        f.write(doc)
+                except Exception as e:
+                    print(f"Error saving documentation for {file_path}: {str(e)}")
+                    continue
             except Exception as e:
                 print(f"Documentation generation failed for {file_path}: {str(e)}")
                 continue
+        else:
+            with open(file_path, 'r') as f:
+                doc = f.read()
 
-            # Analyze for business logic flaws
-            try:
-                flaws = generate_threat_model(doc, lang)
-                if flaws.strip():
-                    flaws_list.append((file_path, flaws))
-            except Exception as e:
-                print(f"Threat model generation failed for {file_path}: {str(e)}")
+        # Analyze for business logic flaws
+        try:
+            print("Generating threat model")
+            flaws = generate_threat_model(doc, lang)
+            if flaws.strip():
+                flaws_list.append((file_path, flaws))
+        except Exception as e:
+            print(f"Threat model generation failed for {file_path}: {str(e)}")
 
-            # Save documentation
-            try:
-                doc_dir = os.path.dirname(file_path)
-                doc_filename = os.path.basename(file_path) + '.docs.md'
-                doc_path = os.path.join(doc_dir, doc_filename)
-
-                with open(doc_path, 'w') as f:
-                    f.write(f"# {lang.capitalize()} Code Documentation\n")
-                    f.write(doc)
-            except Exception as e:
-                print(f"Error saving documentation for {file_path}: {str(e)}")
-                continue
-
-            # Extract summary (first paragraph)
-            summary = doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
-            summaries.append((file_path, summary))
+        # Extract summary (first paragraph)
+        summary = doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
+        summaries.append((file_path, summary))
 
         try:
             with open(cache_path, 'r') as f:
@@ -556,7 +561,6 @@ def main():
             language_config,
             args.max_tokens
         )
-        print(result)
     except Exception as e:
         print(f"Processing failed: {e}")
         traceback.print_exc()
