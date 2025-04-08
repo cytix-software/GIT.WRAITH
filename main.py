@@ -182,9 +182,9 @@ def bedrock_generate(prompt: str, model_id='mistral.mixtral-8x7b-instruct-v0:1')
     """Generate text using AWS Bedrock AI model"""
     body = {
         "prompt": f"<s>[INST] {prompt} [/INST]",
-        "temperature": 0.5,
-        "top_k": 50,
-        "top_p": 0.9
+        "temperature": 0.2,
+        "top_k": 20,
+        "top_p": 0.8
     }
 
     response = bedrock.invoke_model(
@@ -259,9 +259,10 @@ def generate_threat_model(summary):
         f"Based on the following documentation for a codebase, create a simple application security threat model \n\n"
         f"Target the following key areas:\n\n"
         f"   - Key functionality and features\n"
-        f"   - Authentication and authorization mechanisms\n"
-        f"   - Data processing flows\n"
-        f"   - External integrations and APIs\n\n"
+        f"   - Data Flow\n"
+        f"   - External Integrations and APIs\n\n"
+        f"   - Application Threat Model:\n\n"
+        f"Where function names and other code elements are used you should use code formatting in markdown"
         f"Format your response in clear, well-structured markdown. Be as concise as possible, keep to a single paragraph."
         f"<documentation>\n{summary}\n</documentation>\n"
         f"Application Security Threat Model:"
