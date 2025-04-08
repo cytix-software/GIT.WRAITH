@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!venv/bin/python
 import os
 import sys
 import ollama
@@ -10,6 +10,7 @@ from pathspec import GitIgnoreSpec
 from typing import Dict, List, Optional
 import json
 import traceback
+import hashlib
 
 MAX_TOKENS = 4096  # Adjust based on Mistral's context limit
 
@@ -75,6 +76,97 @@ LANGUAGE_CONFIG = {
         'section_regex': r'^\s*(function)\b'
     }
 }
+
+def compute_file_hash(filepath, algorithm='sha256', max_size=10 * 1024 * 1024, sample_size=64 * 1024):
+    """
+    Computes the hash of a file. If the file is larger than max_size,
+    only a sample from the beginning and end of the file is used.
+
+    Args:
+        filepath (str): Path to the file.
+        algorithm (str): Hash algorithm (default 'sha256').
+        max_size (int): Threshold size (in bytes) above which only a sample is hashed.
+        sample_size (int): Number of bytes to read from start and end for large files.
+
+    Returns:
+        str: Hexadecimal digest of the hash.
+    """
+    try:
+        hasher = hashlib.new(algorithm)
+    except ValueError:
+        raise ValueError(f"Unsupported hash algorithm: {algorithm}")
+
+    file_size = os.path.getsize(filepath)
+
+    with open(filepath, 'rb') as f:
+        # For small files, hash the entire content.
+        if file_size <= max_size:
+            while True:
+                chunk = f.read(4096)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        else:
+            # For large files, hash only a sample: beginning, file size, and end.
+            # Read beginning
+            beginning = f.read(sample_size)
+            hasher.update(beginning)
+
+            # Include the file size to help differentiate files with similar samples.
+            hasher.update(str(file_size).encode('utf-8'))
+
+            # Read end sample: seek to the last sample_size bytes
+            if file_size > sample_size:
+                f.seek(-sample_size, os.SEEK_END)
+                end_sample = f.read(sample_size)
+                hasher.update(end_sample)
+
+    return hasher.hexdigest()
+
+def get_changed_files(repo_path, file_list, json_hashes_path, algorithm='sha256',
+                                 max_size=10 * 1024 * 1024, sample_size=64 * 1024):
+    """
+    Checks a list of files against a stored JSON of hashes. Returns only those files
+    that are new or whose content has changed. If the stored hash file is missing or empty,
+    it returns all files. The new hash values are saved to the JSON file.
+
+    Args:
+        file_list (list of str): List of file paths to check.
+        json_hashes_path (str): Path to the JSON file storing file hashes.
+        algorithm (str): Hashing algorithm (default 'sha256').
+        max_size (int): File size threshold for partial hashing.
+        sample_size (int): Sample size in bytes for hashing large files.
+
+    Returns:
+        list of str: Files that have changed or are not present in the stored hashes.
+    """
+    # Load previous hashes if available
+    try:
+        with open(json_hashes_path, 'r') as f:
+            stored_hashes = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        stored_hashes = {}
+
+    # Determine if we should consider all files changed
+    full_run = not stored_hashes or len(stored_hashes) == 0
+
+    new_hashes = {}
+    changed_files = []
+
+    for filepath in file_list:
+        full_path = os.path.join(repo_path, filepath)
+        if not os.path.isfile(full_path):
+            continue
+
+        new_hash = compute_file_hash(full_path, algorithm=algorithm,
+                                     max_size=max_size, sample_size=sample_size)
+        new_hashes[filepath] = new_hash
+        # If a full run (no previous hashes) or if the file is new/changed, add to changed list.
+        if full_run or stored_hashes.get(filepath) != new_hash:
+            changed_files.append(filepath)
+
+    return changed_files,new_hashes
+
 
 def get_language_config(enable_langs: Optional[List[str]] = None,
                       disable_langs: Optional[List[str]] = None) -> Dict:
@@ -167,6 +259,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
     flaws_list = []  # New list to collect flaws
     spec = get_gitignore_spec(repo_path)
 
+    filtered_files = []
     for root, dirs, files in os.walk(repo_path, topdown=True):
         # Check if current directory is ignored (handle directory patterns with/without trailing slash)
         rel_dir = os.path.relpath(root, repo_path).replace('\\', '/')
@@ -177,7 +270,6 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
                 continue  # Skip processing files in this directory
 
         # Filter files using .gitignore
-        filtered_files = []
         for file in files:
             file_path = os.path.join(root, file)
             rel_path = os.path.relpath(file_path, repo_path).replace('\\', '/')
@@ -186,63 +278,76 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             if spec and spec.match_file(rel_path):
                 continue
 
-            filtered_files.append(file)
+            filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
 
-        # Process remaining files
-        for file in filtered_files:
-            ext = os.path.splitext(file)[1].lower()
-            lang = next((k for k, v in config.items() if ext in v['extensions']), None)
-            file_path = os.path.join(root, file)
-            #lang, config = get_language_config(file_path)
+    cache_path = os.path.join(repo_path, '.wraith.cache.json')
+    changed_files,new_hashes = get_changed_files(repo_path, filtered_files, cache_path)
+    # Process remaining files
+    for repo_file_path in changed_files:
+        file_path = os.path.join(repo_path, repo_file_path)
+        ext = os.path.splitext(file_path)[-1].lower()
+        lang = next((k for k, v in config.items() if ext in v['extensions']), None)
 
-            if not lang:
-                continue  # Skip unsupported file types
+        if not lang:
+            continue  # Skip unsupported file types
 
-            print(f"Processing: {file_path}")
+        print(f"Processing: {file_path}")
 
-            # Read and truncate code
-            try:
-                with open(file_path, 'r') as f:
-                    original_code = f.read()
+        # Read and truncate code
+        try:
+            with open(file_path, 'r') as f:
+                original_code = f.read()
 
-                section_regex = config[lang]['section_regex']
-                truncated_code = truncate_code(original_code, max_tokens, section_regex)
-            except Exception as e:
-                print(f"Error reading {file_path}: {str(e)}")
-                traceback.print_exc()
-                continue
+            section_regex = config[lang]['section_regex']
+            truncated_code = truncate_code(original_code, max_tokens, section_regex)
+        except Exception as e:
+            print(f"Error reading {file_path}: {str(e)}")
+            traceback.print_exc()
+            continue
 
-            # Generate documentation
-            try:
-                doc = generate_documentation(truncated_code, file_path)
-            except Exception as e:
-                print(f"Documentation generation failed for {file_path}: {str(e)}")
-                continue
+        # Generate documentation
+        try:
+            doc = generate_documentation(truncated_code, file_path)
+        except Exception as e:
+            print(f"Documentation generation failed for {file_path}: {str(e)}")
+            continue
 
-            # Analyze for business logic flaws
-            try:
-                flaws = analyze_business_logic_flaws(doc, lang)
-                if flaws.strip():
-                    flaws_list.append((file_path, flaws))
-            except Exception as e:
-                print(f"Flaw analysis failed for {file_path}: {str(e)}")
+        # Analyze for business logic flaws
+        try:
+            flaws = analyze_business_logic_flaws(doc, lang)
+            if flaws.strip():
+                flaws_list.append((file_path, flaws))
+        except Exception as e:
+            print(f"Flaw analysis failed for {file_path}: {str(e)}")
 
-            # Save documentation
-            try:
-                doc_dir = os.path.dirname(file_path)
-                doc_filename = os.path.basename(file_path) + '.docs.md'
-                doc_path = os.path.join(doc_dir, doc_filename)
+        # Save documentation
+        try:
+            doc_dir = os.path.dirname(file_path)
+            doc_filename = os.path.basename(file_path) + '.docs.md'
+            doc_path = os.path.join(doc_dir, doc_filename)
 
-                with open(doc_path, 'w') as f:
-                    f.write(f"# {lang.capitalize()} Code Documentation\n")
-                    f.write(doc)
-            except Exception as e:
-                print(f"Error saving documentation for {file_path}: {str(e)}")
-                continue
+            with open(doc_path, 'w') as f:
+                f.write(f"# {lang.capitalize()} Code Documentation\n")
+                f.write(doc)
+        except Exception as e:
+            print(f"Error saving documentation for {file_path}: {str(e)}")
+            continue
 
-            # Extract summary (first paragraph)
-            summary = doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
-            summaries.append((file_path, summary))
+        # Extract summary (first paragraph)
+        summary = doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
+        summaries.append((file_path, summary))
+
+        try:
+            with open(cache_path, 'r') as f:
+                hashes = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            hashes = {}
+
+        with open(cache_path, 'w') as f:
+            f.truncate(0)
+            f.seek(0)
+            hashes[repo_file_path] = new_hashes[repo_file_path]
+            json.dump(hashes, f, indent=4)
 
     # Generate top-level summary
     try:
