@@ -505,7 +505,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             #remove hashes that are missing from the new_hashes to avoid cruft building up
             for key in hashes.keys():
                 if key not in new_hashes.keys():
-                    del hashe[key]
+                    del hashes[key]
             json.dump(hashes, f, indent=4)
 
     # Generate repository-wide summary document

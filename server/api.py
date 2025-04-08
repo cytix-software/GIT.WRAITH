@@ -8,19 +8,25 @@ def healthCheck():
 @get('/api/scan')
 @post('/api/scan')
 def scan():
-  repo_url = request.query['repo_url']
-
-  if not repo_url and (not request.json or 'repo_url' not in request.json):
+  if 'repo_url' in request.query: repo_url = request.query['repo_url']
+  elif request.json and 'repo_url' in request.json: repo_url = request.json['repo_url']
+  else: 
     response.status = 400
     return { 'status': response.status, 'message': 'Bad Request - parameter repo_url is required.' }
 
-  repo_url = repo_url or request.json['repo_url']
+  # TODO: find a way to turn a URL for a github project into actual file contents to feed into the process_repository function
 
   from main import process_repository, LANGUAGE_CONFIG, MAX_TOKENS
-
-  result = process_repository(
-    repo_path=repo_url,
-    config=LANGUAGE_CONFIG,
-    max_tokens=MAX_TOKENS
-  )
-  return result
+  try:
+    result = process_repository(
+      repo_path=repo_url,
+      config=LANGUAGE_CONFIG,
+      max_tokens=MAX_TOKENS
+    )
+    if not result:
+      response.status = 500
+      return { 'error': 'Something bad happened here' }
+    return result
+  except Exception as e:
+    response.status = 500
+    return e
