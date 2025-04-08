@@ -236,60 +236,35 @@ def generate_documentation(code, file_path):
     )
     return bedrock_generate(prompt)
 
+def generate_summary(documentation):
+    """Generate a summary of the documentation"""
+    prompt = (
+        f"<s><instructions>You are an expert software engineer and technical writer. "
+        f"Your task is to analyze the following documentation and generate a concise summary, up to 3 sentences long.\n\n"
+        f"</instructions>\n"
+        f"<documentation>\n{documentation}\n</documentation>\n"
+        f"Summary:"
+    )
+    return bedrock_generate(prompt)
+
 # Analyzes code documentation to identify potential business logic issues and vulnerabilities.
 # Identifies issues like inconsistent error handling, missing edge cases,
 # potential race conditions, security vulnerabilities, and business rule violations.
 # Input: documentation (str) - documentation to analyze, lang (str) - programming language
 # Output: str - numbered list of identified potential flaws with descriptions
-def generate_threat_model(documentation, lang):
+def generate_threat_model(summary):
     """Generate a comprehensive application security threat model based on code documentation"""
     prompt = (
-        f"<s>[INST] You are an expert application security penetration tester and threat modeler. "
-        f"Based on the following documentation for a {lang} codebase, create a detailed application security threat model "
-        f"from an attacker's perspective.\n\n"
-        f"Documentation:\n{documentation}\n\n"
-        f"Create an application security focused threat model following these guidelines:\n\n"
-        f"1. Application Overview:\n"
-        f"   - Key application functionality and features\n"
-        f"   - User roles and privilege levels\n"
+        f"<s><instructions> You are an expert application security penetration tester and threat modeler. "
+        f"Based on the following documentation for a codebase, create a simple application security threat model \n\n"
+        f"Target the following key areas:\n\n"
+        f"   - Key functionality and features\n"
         f"   - Authentication and authorization mechanisms\n"
         f"   - Data processing flows\n"
         f"   - External integrations and APIs\n\n"
-        f"2. Attack Surface Analysis:\n"
-        f"   - User input points (forms, APIs, file uploads)\n"
-        f"   - Session management mechanisms\n"
-        f"   - State transitions and business workflows\n"
-        f"   - Data storage and retrieval points\n"
-        f"   - Integration points with external systems\n\n"
-        f"3. Attack Scenarios:\n"
-        f"   IMPORTANT: Only identify attack scenarios where there is clear evidence in the documentation.\n"
-        f"   Focus on how an attacker could exploit the application's functionality.\n"
-        f"   For each identified attack scenario, provide:\n"
-        f"   - Specific application functionality that could be exploited\n"
-        f"   - Step-by-step attack path from an attacker's perspective\n"
-        f"   - Required attacker position (authenticated/unauthenticated)\n"
-        f"   - Technical prerequisites for the attack\n"
-        f"   - Potential impact on the application or its users\n\n"
-        f"4. Security Weaknesses:\n"
-        f"   - Document exploitable application behaviors\n"
-        f"   - Identify security mechanism bypasses\n"
-        f"   - Note any insufficient validation or sanitization\n"
-        f"   - Point out trust assumptions that could be violated\n\n"
-        f"5. Attack Testing Guide:\n"
-        f"   - Specific payloads or techniques to test each attack scenario\n"
-        f"   - Tools useful for exploiting identified weaknesses\n"
-        f"   - Custom scripts or modifications needed\n"
-        f"   - Tips for bypassing existing security controls\n\n"
-        f"6. Impact Assessment:\n"
-        f"   - Exploitability rating for each attack scenario\n"
-        f"   - Potential business and user impact\n"
-        f"   - Attack complexity assessment\n"
-        f"   - Detection likelihood\n\n"
-        f"Format your response in clear, well-structured markdown. "
-        f"Make the threat model practical for security testers to use as an attack guide.\n"
-        f"IMPORTANT: Focus only on realistic application security threats that an attacker could exploit.\n"
-        f"Base all attack scenarios on actual application functionality evident in the documentation.\n\n"
-        f"Application Security Threat Model: [/INST]"
+        f"Format your response in clear, well-structured markdown. Be as concise as possible, keep to a single paragraph."
+        f"<documentation>\n{summary}\n</documentation>\n"
+        f"Application Security Threat Model:"
     )
     try:
         return bedrock_generate(prompt)
@@ -479,17 +454,9 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             with open(file_path, 'r') as f:
                 doc = f.read()
 
-        # Analyze for business logic flaws
-        try:
-            print("Generating threat model")
-            flaws = generate_threat_model(doc, lang)
-            if flaws.strip():
-                flaws_list.append((file_path, flaws))
-        except Exception as e:
-            print(f"Threat model generation failed for {file_path}: {str(e)}")
-
         # Extract summary (first paragraph)
-        summary = doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
+        summary = generate_summary(doc)#doc.split('\n\n')[0] if '\n\n' in doc else doc.split('\n')[0]
+        print("Summary:", summary)
         summaries.append((file_path, summary))
 
         try:
@@ -521,14 +488,11 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
 
     # Generate business logic analysis report
     flaws_report_path = os.path.join(repo_path, 'logic-flaws.analysis.md')
+
     try:
         with open(flaws_report_path, 'w') as f:
-            for file_path, flaws in flaws_list:
-                rel_path = os.path.relpath(file_path, repo_path).replace('\\', '/')
-                f.write(f"File: {rel_path}\n")
-                f.write("Potential Business Logic Flaws:\n")
-                f.write(flaws)
-                f.write("\n" + "="*40 + "\n")
+            f.write(generate_threat_model(". ".join([f"Path: {path}, summary: {summary}" for path, summary in summaries])))
+
     except Exception as e:
         print(f"Error creating business logic flaws report: {str(e)}")
 
