@@ -6,6 +6,8 @@
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>GIT.WRAITH</title>
     <link rel="stylesheet" href="styles.css">
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
 </head>
 <body>
     <header>
@@ -18,9 +20,8 @@
         <div class="demo-container">
             <input type="text" id="git-url" placeholder="Enter Git URL" />
             <button id="demo-btn">Run Demo</button>
-            <div id="demo-success" class="hidden">
-                <p><strong>Demo Repository: <span>example-repo/awesome-project</span></strong></p>
-                <p>Analysis Complete! Threat Model, Documentation, and Risk Insights generated successfully.</p>
+            <div id="demo-success">
+
             </div>
         </div>
     </section>
@@ -47,6 +48,6 @@
         <p>"GIT.WRAITH was built for those who know that the most dangerous vulnerabilities hide in logic — not just syntax."</p>
     </footer>
 
-    <script src="script.js"></script>
+    <script defer src="script.js"></script>
 </body>
 </html>
