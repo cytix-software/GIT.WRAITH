@@ -645,6 +645,8 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
     except Exception as e:
         print(f"Error creating data flow diagram: {str(e)}")
 
+    return doc_contents
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Repository Code Processor')
