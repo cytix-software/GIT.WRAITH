@@ -8,7 +8,7 @@ def is_github_url(url):
     pattern = r'^https:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)\/?$'
     return re.match(pattern, url) is not None
 
-def get_repo(github_url, clone_dir="/tmp/repo") -> Dict[str, str]:
+def get_repo(github_url, clone_dir="./.git_wraith_repo") -> Dict[str, str]:
     if not is_github_url(github_url):
         raise ValueError("Invalid GitHub URL")
 

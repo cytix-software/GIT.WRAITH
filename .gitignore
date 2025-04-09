@@ -1,3 +1,5 @@
 venv
 .DS_Store
 __pycache__
+.git_wraith_docs
+.git_wraith_repo
