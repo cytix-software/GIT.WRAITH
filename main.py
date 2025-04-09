@@ -16,12 +16,12 @@ from server import *
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from tqdm import tqdm
+import random
+from botocore.exceptions import ClientError
+import math
 
 # Initialize Bedrock client for AI model access
 bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
-
-# Maximum tokens allowed for code analysis
-MAX_TOKENS = 4096
 
 # Configuration for different programming languages
 # Each language specifies:
@@ -187,11 +187,19 @@ def compute_cache(repo_path, file_list, json_hashes_path, algorithm='sha256',
 
     return changed_files, new_cache
 
+import time
+import random
+import json
+from botocore.exceptions import ClientError
+
 def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v1:0') -> str:
-    """Generate text using AWS Bedrock AI model"""
+    """Generate text using AWS Bedrock AI model with exponential backoff for ThrottlingExceptions"""
+    #estimate the number of tokens needed
+    max_tokens = 2**math.ceil(math.log(len(prompt)/4, 2))
+
     body = {
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 4096,
+        "max_tokens": max_tokens,
         "messages": [
             {
                 "role": "user",
@@ -203,20 +211,48 @@ def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v
         "top_p": 0.8
     }
 
-    response = bedrock.invoke_model(
-        modelId=model_id,
-        body=json.dumps(body),
-        contentType='application/json',
-        accept='application/json'
-    )
+    max_retries = 5
+    initial_delay = 1.0  # seconds
+    backoff_factor = 2
+    jitter = 0.1  # 10% jitter
 
-    try:
-        raw = response['body'].read().decode('utf-8')
-        data = json.loads(raw)
-        return data['content'][0]['text'].strip()
-    except Exception as e:
-        print("Error parsing Bedrock response:", str(e))
-        return ""
+    for attempt in range(max_retries + 1):
+        try:
+            response = bedrock.invoke_model(
+                modelId=model_id,
+                body=json.dumps(body),
+                contentType='application/json',
+                accept='application/json'
+            )
+
+            try:
+                raw = response['body'].read().decode('utf-8')
+                data = json.loads(raw)
+                if data['stop_reason'] == 'max_tokens':
+                    tqdm.write(f"Warning: Output truncated, max tokens reached {max_tokens}")
+                return data['content'][0]['text'].strip()
+            except Exception as e:
+                tqdm.write("Error parsing Bedrock response:", str(e))
+                return ""
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'ThrottlingException' and attempt < max_retries:
+                # Calculate delay with exponential backoff and jitter
+                delay = initial_delay * (backoff_factor ** attempt)
+                delay *= random.uniform(1 - jitter, 1 + jitter)
+                time.sleep(delay)
+                continue
+            else:
+                # Re-raise the exception if it's not a ThrottlingException or retries are exhausted
+                tqdm.write(f"Error invoking Bedrock model: {str(e)}")
+                return ""
+        except Exception as e:
+            # Handle any other exceptions that occur during the API call
+            tqdm.write(f"Unexpected error: {str(e)}")
+            traceback.print_exc()
+
+            return ""
 
 def get_language_config(enable_langs: Optional[List[str]] = None,
                       disable_langs: Optional[List[str]] = None) -> Dict:
@@ -268,74 +304,89 @@ def generate_summary(documentation, file_path):
 # potential race conditions, security vulnerabilities, and business rule violations.
 # Input: documentation (str) - documentation to analyze, lang (str) - programming language
 # Output: str - numbered list of identified potential flaws with descriptions
-def generate_threat_model_diagram(summary):
+def generate_threat_model_diagram(summaries):
     """Generate a security-focused threat model diagram using mermaid.js"""
-    prompt = (
-        f"<s>You are an expert security architect. Create a threat model diagram based on the provided documentation.\n\n"
-        f"Requirements:\n"
-        f"1. Use mermaid.js flowchart TD syntax\n"
-        f"2. Node types:\n"
-        f"   - ((name)) for external entities/users\n"
-        f"   - [name] for internal processes\n"
-        f"   - [(name)] for data stores\n"
-        f"   - {{{{name}}}} for security controls\n"
-        f"   - >name] for outputs\n\n"
-        f"3. Data Flow Labels MUST:\n"
-        f"   - Use EXACT data types/objects from the code (e.g., 'JiraTicket', 'UserCredentials')\n"
-        f"   - Include specific operations (e.g., 'POST /api/tickets', 'GET /users/{{id}}')\n"
-        f"   - Show state changes (e.g., 'Raw JiraTicket → Validated JiraTicket')\n"
-        f"   - Use actual field names and types from the documentation\n\n"
-        f"4. Trust Boundaries:\n"
-        f"   - Use subgraphs with descriptive names based on actual system zones\n"
-        f"   - Label cross-boundary data flows with specific protocols/methods\n\n"
-        f"Example structure (using specific data types):\n"
-        f"```mermaid\n"
-        f"flowchart TD\n"
-        f"    %% Styles\n"
-        f"    classDef user fill:#fdd,stroke:#333,stroke-width:2px\n"
-        f"    classDef process fill:#ddf,stroke:#333,stroke-width:2px\n"
-        f"    classDef storage fill:#dfd,stroke:#333,stroke-width:2px\n"
-        f"    classDef control fill:#fff,stroke:#f66,stroke-width:3px\n"
-        f"    classDef external fill:#fdb,stroke:#333,stroke-width:2px\n"
-        f"    \n"
-        f"    %% Trust Boundaries\n"
-        f"    subgraph ClientZone[Browser Context]\n"
-        f"        User((Customer))\n"
-        f"        Browser[Web Client]\n"
-        f"    end\n"
-        f"    \n"
-        f"    subgraph APIZone[API Context]\n"
-        f"        Auth{{{{JWT Validation}}}}\n"
-        f"        API[Order Service]\n"
-        f"        DB[(Order Database)]\n"
-        f"    end\n"
-        f"    \n"
-        f"    %% Data Flows with Specific Types\n"
-        f"    User -->|CustomerCredentials| Browser\n"
-        f"    Browser -->|POST /auth {{username, password}}| Auth\n"
-        f"    Auth -->|ValidatedSession {{user_id, roles}}| API\n"
-        f"    API -->|INSERT OrderRecord {{id, items: array, total}}| DB\n"
-        f"    DB -->|SELECT OrderDetails| API\n"
-        f"    API -->|OrderConfirmation {{order_id, status}}| Browser\n"
-        f"    \n"
-        f"    %% Apply styles\n"
-        f"    class User user\n"
-        f"    class Auth control\n"
-        f"    class API process\n"
-        f"    class DB storage\n"
-        f"    class Browser process\n"
-        f"```\n\n"
-        f"IMPORTANT:\n"
-        f"1. Extract SPECIFIC data types and fields from the documentation\n"
-        f"2. Use ACTUAL API endpoints and methods\n"
-        f"3. Show REAL data transformations between components\n"
-        f"4. Label boundaries based on ACTUAL system architecture\n"
-        f"5. Include only components and flows from documentation\n"
-        f"6. Make data flow labels as specific as possible\n"
-        f"7. Return ONLY the mermaid.js diagram\n\n"
-        f"Documentation to analyze:\n{summary}\n"
-        f"[/INST]"
-    )
+    claude_max_length = 128_000/4
+
+    #deal with prompts that are too large by randomly sampling the summaries, since we can't deal with everything
+    serialized_summary = None
+    prompt = ""
+    summaries = [f"Path: {path}, summary: {summary}" for path, summary in summaries]
+    sample_size = len(summaries)
+
+    while not serialized_summary or len(prompt) > claude_max_length:
+        serialized_summary = ". ".join(random.sample(summaries, sample_size))
+        prompt = (
+            f"<s>You are an expert security architect. Create a threat model diagram based on the provided documentation.\n\n"
+            f"Requirements:\n"
+            f"1. Use mermaid.js flowchart TD syntax\n"
+            f"2. Node types:\n"
+            f"   - ((name)) for external entities/users\n"
+            f"   - [name] for internal processes\n"
+            f"   - [(name)] for data stores\n"
+            f"   - {{{{name}}}} for security controls\n"
+            f"   - >name] for outputs\n\n"
+            f"3. Data Flow Labels MUST:\n"
+            f"   - Use EXACT data types/objects from the code (e.g., 'JiraTicket', 'UserCredentials')\n"
+            f"   - Include specific operations (e.g., 'POST /api/tickets', 'GET /users/{{id}}')\n"
+            f"   - Show state changes (e.g., 'Raw JiraTicket → Validated JiraTicket')\n"
+            f"   - Use actual field names and types from the documentation\n\n"
+            f"4. Trust Boundaries:\n"
+            f"   - Use subgraphs with descriptive names based on actual system zones\n"
+            f"   - Label cross-boundary data flows with specific protocols/methods\n\n"
+            f"Example structure (using specific data types):\n"
+            f"```mermaid\n"
+            f"flowchart TD\n"
+            f"    %% Styles\n"
+            f"    classDef user fill:#fdd,stroke:#333,stroke-width:2px\n"
+            f"    classDef process fill:#ddf,stroke:#333,stroke-width:2px\n"
+            f"    classDef storage fill:#dfd,stroke:#333,stroke-width:2px\n"
+            f"    classDef control fill:#fff,stroke:#f66,stroke-width:3px\n"
+            f"    classDef external fill:#fdb,stroke:#333,stroke-width:2px\n"
+            f"    \n"
+            f"    %% Trust Boundaries\n"
+            f"    subgraph ClientZone[Browser Context]\n"
+            f"        User((Customer))\n"
+            f"        Browser[Web Client]\n"
+            f"    end\n"
+            f"    \n"
+            f"    subgraph APIZone[API Context]\n"
+            f"        Auth{{{{JWT Validation}}}}\n"
+            f"        API[Order Service]\n"
+            f"        DB[(Order Database)]\n"
+            f"    end\n"
+            f"    \n"
+            f"    %% Data Flows with Specific Types\n"
+            f"    User -->|CustomerCredentials| Browser\n"
+            f"    Browser -->|POST /auth {{username, password}}| Auth\n"
+            f"    Auth -->|ValidatedSession {{user_id, roles}}| API\n"
+            f"    API -->|INSERT OrderRecord {{id, items: array, total}}| DB\n"
+            f"    DB -->|SELECT OrderDetails| API\n"
+            f"    API -->|OrderConfirmation {{order_id, status}}| Browser\n"
+            f"    \n"
+            f"    %% Apply styles\n"
+            f"    class User user\n"
+            f"    class Auth control\n"
+            f"    class API process\n"
+            f"    class DB storage\n"
+            f"    class Browser process\n"
+            f"```\n\n"
+            f"IMPORTANT:\n"
+            f"1. Extract SPECIFIC data types and fields from the documentation\n"
+            f"2. Use ACTUAL API endpoints and methods\n"
+            f"3. Show REAL data transformations between components\n"
+            f"4. Label boundaries based on ACTUAL system architecture\n"
+            f"5. Include only components and flows from documentation\n"
+            f"6. Make data flow labels as specific as possible\n"
+            f"7. Return ONLY the mermaid.js diagram\n\n"
+            f"Documentation to analyze:\n{serialized_summary}\n"
+            f"[/INST]"
+        )
+        sample_size -= 1
+    sample_size += 1
+
+    if sample_size != len(summaries):
+        tqdm.write(f"Warning: Codebase is large, reducing accuracy to {round(100/len(summaries)*sample_size)}%...") #we should calculate how much accuracy we're losing
 
     try:
         diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
@@ -352,7 +403,9 @@ def generate_threat_model_diagram(summary):
         return diagram
 
     except Exception as e:
-        print(f"Error generating threat model diagram: {str(e)}")
+        tqdm.write(f"Error generating threat model diagram: {str(e)}")
+        traceback.print_exc()
+
         return """flowchart TD
     %% Styles
     classDef user fill:#fdd,stroke:#333,stroke-width:2px
@@ -594,11 +647,13 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
                 if not success:
                     continue
 
-                summaries.append((file_path, summary))
-                doc_contents.append((file_path, doc))
 
+                #only update hashes if we succeeded
+                doc_contents.append((file_path, doc))
                 cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
+
                 if summary:
+                    summaries.append((file_path, summary))
                     cache['summaries'][repo_file_path] = summary
 
         for path in list(cache['hashes'].keys()):
@@ -618,20 +673,21 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
                 rel_path = os.path.relpath(path, repo_path).replace('\\', '/')
                 f.write(f"## {rel_path}\n\n{summary}\n\n")
     except Exception as e:
-        print(f"Error creating summary: {str(e)}")
+        tqdm.write(f"Error creating summary: {str(e)}")
 
     # Generate data flow diagram
     diagram_path = os.path.join(repo_path, 'system-dataflow.md')
     try:
-        print(f"Documentation generated, generating threat model diagram...")
+        tqdm.write(f"Documentation generated, generating threat model diagram...")
         # Generate the diagram using the comprehensive documentation
-        diagram = generate_threat_model_diagram(". ".join([f"Path: {path}, summary: {summary}" for path, summary in summaries]))
+        diagram = generate_threat_model_diagram(summaries)
 
         # Write only the raw mermaid diagram to the file
         with open(diagram_path, 'w') as f:
             f.write(diagram)
     except Exception as e:
-        print(f"Error creating data flow diagram: {str(e)}")
+        tqdm.write(f"Error creating data flow diagram: {str(e)}")
+        traceback.print_exc()
 
 def main():
     # Parse command line arguments
@@ -652,7 +708,7 @@ def main():
                 config = json.loads(content) if content else {}
                 config = config or {}  # Fallback to empty dict if loaded value is false
         except Exception as e:
-            print(f"Error loading config file: {e}")
+            tqdm.write(f"Error loading config file: {e}")
             return
 
     # Set up language processing configuration
@@ -670,7 +726,7 @@ def main():
                 args.max_tokens
             )
         except Exception as e:
-            print(f"Processing failed: {e}")
+            tqdm.write(f"Processing failed: {e}")
             traceback.print_exc()
     else:
         # Boot the HTTP server if we're not trying to process a specific repo
