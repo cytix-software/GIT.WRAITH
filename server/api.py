@@ -1,3 +1,4 @@
+import json
 from bottle import route, request, response, get, post
 from github import get_repo
 
@@ -21,14 +22,16 @@ def scan():
   from main import process_repository, LANGUAGE_CONFIG, MAX_TOKENS
   try:
     result = process_repository(
-      repo_path=repo_url,
+      repo_path='/tmp/repo',
       config=LANGUAGE_CONFIG,
       max_tokens=MAX_TOKENS
     )
     if not result:
       response.status = 500
-      return { 'error': 'Something bad happened here' }
-    return result
+      return { 'error': 'An unknown error occurred when generating docs.' }
+
+    response.content_type = 'application/json'
+    return json.dumps(result)
   except Exception as e:
     response.status = 500
     return e
