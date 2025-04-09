@@ -195,7 +195,7 @@ from botocore.exceptions import ClientError
 def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v1:0') -> str:
     """Generate text using AWS Bedrock AI model with exponential backoff for ThrottlingExceptions"""
     #estimate the number of tokens needed
-    max_tokens = 2**math.ceil(math.log(len(prompt)/4, 2))
+    max_tokens = 2**math.ceil(math.log(len(prompt)/3, 2))
 
     body = {
         "anthropic_version": "bedrock-2023-05-31",
@@ -273,16 +273,17 @@ def generate_documentation(code, file_path):
     """Generate documentation using Bedrock"""
     prompt = (
         f"<s><instructions>\nYou are an expert software engineer and technical writer. "
-        f"Your task is to analyze this file and generate comprehensive documentation about the code within.\n\n"
+        f"Your task is to analyze this file and generate concise but technically detailed documentation.\n\n"
         f"Please provide:\n"
-        f"1. A high-level overview of the code's purpose and functionality\n"
-        f"2. Detailed description of key components, classes, and functions\n"
-        f"3. Explanation of important algorithms, data structures, or patterns used\n"
-        f"4. Any security considerations or potential vulnerabilities\n"
-        f"5. Dependencies and integration points with other systems\n\n"
-        f"Format your response in clear, well-structured markdown. Refer to the code by either its name '{os.path.basename(file_path)}' or a classname or function name found in the code."
-        f"Use appropriate headings, code blocks, and bullet points for readability. "
-        f"Focus on making the documentation useful for both developers and security engineers.\n</instructions>\n\n"
+        f"1. A single-sentence overview of the file's purpose\n"
+        f"2. Key technical components (classes, functions, data structures) with their specific purposes\n"
+        f"3. Critical algorithms, patterns, or technical implementations\n"
+        f"4. Security considerations specific to the code's functionality\n"
+        f"5. Core dependencies and integration points (ignore third-party library details)\n\n"
+        f"Format your response in clear, concise markdown. "
+        f"Focus on technical implementation details and avoid verbose descriptions. "
+        f"Reference code elements by their exact names from the file.\n"
+        f"Keep each section brief but information-dense.\n</instructions>\n\n"
         f"<code>\n{code}</code>\n\n"
         f"Documentation:"
     )
@@ -326,14 +327,26 @@ def generate_threat_model_diagram(summaries):
             f"   - [(name)] for data stores\n"
             f"   - {{{{name}}}} for security controls\n"
             f"   - >name] for outputs\n\n"
-            f"3. Data Flow Labels MUST:\n"
-            f"   - Use EXACT data types/objects from the code (e.g., 'JiraTicket', 'UserCredentials')\n"
-            f"   - Include specific operations (e.g., 'POST /api/tickets', 'GET /users/{{id}}')\n"
-            f"   - Show state changes (e.g., 'Raw JiraTicket → Validated JiraTicket')\n"
+            f"3. Node Labels MUST:\n"
+            f"   - Extract ACTUAL application name from the documentation (e.g., if docs mention 'MyApp', use 'MyApp')\n"
+            f"   - Extract ACTUAL service names from the documentation (e.g., if docs mention 'auth-service', use 'auth-service')\n"
+            f"   - Extract ACTUAL database names from the documentation (e.g., if docs mention 'users-db', use 'users-db')\n"
+            f"   - Extract ACTUAL API service names from the documentation (e.g., if docs mention 'orders-api', use 'orders-api')\n"
+            f"   - NEVER use generic names like 'example.com' or 'Web Browser'\n"
+            f"   - NEVER make up names - use ONLY names found in the documentation\n\n"
+            f"4. Data Flow Labels MUST:\n"
+            f"   - Use ONLY alphanumeric characters, spaces, and underscores in labels\n"
+            f"   - NO special characters like /, (, ), [, ], {{, }}, etc.\n"
+            f"   - Be SPECIFIC about the data being transmitted (e.g., 'user_login_credentials' instead of 'auth_request')\n"
+            f"   - Include the type of data (e.g., 'user_profile_data' instead of 'http_request')\n"
+            f"   - For API endpoints, use format: 'create_user_profile_data' instead of 'api_tickets_create'\n"
+            f"   - For state changes, use format: 'raw_user_data_to_validated' instead of 'raw_to_validated'\n"
+            f"   - For data fields, use format: 'user_id_and_permissions' instead of 'user_id_roles'\n"
             f"   - Use actual field names and types from the documentation\n\n"
-            f"4. Trust Boundaries:\n"
+            f"5. Trust Boundaries:\n"
             f"   - Use subgraphs with descriptive names based on actual system zones\n"
-            f"   - Label cross-boundary data flows with specific protocols/methods\n\n"
+            f"   - Label cross-boundary data flows with specific protocols/methods\n"
+            f"   - Use format: 'encrypted_user_credentials' instead of 'http_request'\n\n"
             f"Example structure (using specific data types):\n"
             f"```mermaid\n"
             f"flowchart TD\n"
@@ -345,40 +358,41 @@ def generate_threat_model_diagram(summaries):
             f"    classDef external fill:#fdb,stroke:#333,stroke-width:2px\n"
             f"    \n"
             f"    %% Trust Boundaries\n"
-            f"    subgraph ClientZone[Browser Context]\n"
+            f"    subgraph ClientZone[MyApp]\n"
             f"        User((Customer))\n"
-            f"        Browser[Web Client]\n"
+            f"        Frontend[MyApp Frontend]\n"
             f"    end\n"
             f"    \n"
-            f"    subgraph APIZone[API Context]\n"
-            f"        Auth{{{{JWT Validation}}}}\n"
-            f"        API[Order Service]\n"
-            f"        DB[(Order Database)]\n"
+            f"    subgraph APIZone[MyApp API]\n"
+            f"        Auth{{{{auth-service}}}}\n"
+            f"        API[orders-service]\n"
+            f"        DB[(orders-db)]\n"
             f"    end\n"
             f"    \n"
             f"    %% Data Flows with Specific Types\n"
-            f"    User -->|CustomerCredentials| Browser\n"
-            f"    Browser -->|POST /auth {{username, password}}| Auth\n"
-            f"    Auth -->|ValidatedSession {{user_id, roles}}| API\n"
-            f"    API -->|INSERT OrderRecord {{id, items: array, total}}| DB\n"
-            f"    DB -->|SELECT OrderDetails| API\n"
-            f"    API -->|OrderConfirmation {{order_id, status}}| Browser\n"
+            f"    User -->|user_login_credentials| Frontend\n"
+            f"    Frontend -->|encrypted_user_credentials| Auth\n"
+            f"    Auth -->|validated_user_session| API\n"
+            f"    API -->|order_transaction_data| DB\n"
+            f"    DB -->|order_details_data| API\n"
+            f"    API -->|order_confirmation_data| Frontend\n"
             f"    \n"
             f"    %% Apply styles\n"
             f"    class User user\n"
             f"    class Auth control\n"
             f"    class API process\n"
             f"    class DB storage\n"
-            f"    class Browser process\n"
+            f"    class Frontend process\n"
             f"```\n\n"
             f"IMPORTANT:\n"
-            f"1. Extract SPECIFIC data types and fields from the documentation\n"
-            f"2. Use ACTUAL API endpoints and methods\n"
+            f"1. Extract ACTUAL application and service names from the documentation - NEVER use generic examples\n"
+            f"2. Convert all API endpoints to safe format but include data type (e.g., 'create_user_profile_data')\n"
             f"3. Show REAL data transformations between components\n"
             f"4. Label boundaries based on ACTUAL system architecture\n"
             f"5. Include only components and flows from documentation\n"
-            f"6. Make data flow labels as specific as possible\n"
-            f"7. Return ONLY the mermaid.js diagram\n\n"
+            f"6. Make data flow labels as specific as possible about the actual data being transmitted\n"
+            f"7. Return ONLY the mermaid.js diagram\n"
+            f"8. Use ONLY safe characters in labels (alphanumeric, spaces, underscores)\n\n"
             f"Documentation to analyze:\n{serialized_summary}\n"
             f"[/INST]"
         )
@@ -387,6 +401,7 @@ def generate_threat_model_diagram(summaries):
 
     if sample_size != len(summaries):
         tqdm.write(f"Warning: Codebase is large, reducing accuracy to {round(100/len(summaries)*sample_size)}%...") #we should calculate how much accuracy we're losing
+
 
     try:
         diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
@@ -415,31 +430,31 @@ def generate_threat_model_diagram(summaries):
     classDef external fill:#fdb,stroke:#333,stroke-width:2px
 
     %% Trust Boundaries
-    subgraph ClientZone[Browser Context]
+    subgraph ClientZone[MyApp]
         User((Customer))
-        Browser[Web Client]
+        Frontend[MyApp Frontend]
     end
 
-    subgraph APIZone[API Context]
-        Auth{{JWT Validation}}
-        API[Order Service]
-        DB[(Order Database)]
+    subgraph APIZone[MyApp API]
+        Auth{{auth-service}}
+        API[orders-service]
+        DB[(orders-db)]
     end
 
     %% Data Flows with Specific Types
-    User -->|CustomerCredentials| Browser
-    Browser -->|POST /auth {{username, password}}| Auth
-    Auth -->|ValidatedSession {{user_id, roles}}| API
-    API -->|INSERT OrderRecord {{id, items: array, total}}| DB
-    DB -->|SELECT OrderDetails| API
-    API -->|OrderConfirmation {{order_id, status}}| Browser
+    User -->|user_login_credentials| Frontend
+    Frontend -->|encrypted_user_credentials| Auth
+    Auth -->|validated_user_session| API
+    API -->|order_transaction_data| DB
+    DB -->|order_details_data| API
+    API -->|order_confirmation_data| Frontend
 
     %% Apply styles
     class User user
     class Auth control
     class API process
     class DB storage
-    class Browser process"""
+    class Frontend process"""
 
 def get_gitignore_spec(repo_path):
     """Load .gitignore patterns into a GitIgnoreSpec"""
@@ -561,14 +576,16 @@ def process_file(args):
 
     summary = ""
     doc = ""
-    doc_path = os.path.join(os.path.dirname(file_path), os.path.basename(file_path) + '.docs.md')
+    # Store individual file documentation in the files subdirectory
+    docs_dir = os.path.join(repo_path, '.git_wraith_docs')
+    files_dir = os.path.join(docs_dir, 'files')
+    os.makedirs(files_dir, exist_ok=True)
+    doc_path = os.path.join(files_dir, f"{os.path.basename(file_path)}.docs.md")
 
     if repo_file_path in changed_files:
         try:
             tqdm.write(f"{file_path} ({lang}) has changed, processing...")
             doc = generate_documentation(truncated_code, file_path)
-
-            os.makedirs(os.path.dirname(doc_path), exist_ok=True)
 
             with open(doc_path, 'w') as f:
                 f.write(f"# {lang.capitalize()} Code Documentation\n")
@@ -591,12 +608,17 @@ def process_file(args):
             return (False, None, None, None, None)
     return (True, repo_file_path, file_path, summary, doc)
 
-
 def process_repository(repo_path: str, config: Dict, max_tokens: int):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
     doc_contents = []  # Store full documentation content
     spec = get_gitignore_spec(repo_path)
+
+    # Create documentation directories
+    docs_dir = os.path.join(repo_path, '.git_wraith_docs')
+    files_dir = os.path.join(docs_dir, 'files')
+    os.makedirs(docs_dir, exist_ok=True)
+    os.makedirs(files_dir, exist_ok=True)
 
     # Filter out ignored files
     filtered_files = []
@@ -623,7 +645,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             if lang:
                 filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
 
-    cache_path = os.path.join(repo_path, '.wraith.cache.json')
+    cache_path = os.path.join(docs_dir, '.wraith.cache.json')
     changed_files, new_cache = compute_cache(repo_path, filtered_files, cache_path)
 
     try:
@@ -638,7 +660,6 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         cache['summaries'] = {}
 
     with ThreadPoolExecutor(max_workers=16) as executor:
-        #This ain't no blast from the past
         futures = [executor.submit(process_file, (repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens)) for repo_file_path in filtered_files]
         with tqdm(total=len(futures), miniters=1, mininterval=0.1, colour='green', position=0, desc="Generating documentation") as pbar:
             for future in as_completed(futures):
@@ -656,17 +677,17 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
                     summaries.append((file_path, summary))
                     cache['summaries'][repo_file_path] = summary
 
-        for path in list(cache['hashes'].keys()):
-            if path not in new_cache['hashes']:
-                del cache['hashes'][path]
-                if path in cache['summaries']:
-                    del cache['summaries'][path]
+    for path in list(cache['hashes'].keys()):
+        if path not in new_cache['hashes']:
+            del cache['hashes'][path]
+            if path in cache['summaries']:
+                del cache['summaries'][path]
 
-        with open(cache_path, 'w') as f:
-            json.dump(cache, f, indent=4)
+    with open(cache_path, 'w') as f:
+        json.dump(cache, f, indent=4)
 
     try:
-        summary_path = os.path.join(repo_path, 'summary.docs.md')
+        summary_path = os.path.join(docs_dir, 'summary.docs.md')
         with open(summary_path, 'w') as f:
             f.write("# Repository Overview\n\n")
             for path, summary in summaries:
@@ -676,7 +697,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         tqdm.write(f"Error creating summary: {str(e)}")
 
     # Generate data flow diagram
-    diagram_path = os.path.join(repo_path, 'system-dataflow.md')
+    diagram_path = os.path.join(docs_dir, 'system-dataflow.md')
     try:
         tqdm.write(f"Documentation generated, generating threat model diagram...")
         # Generate the diagram using the comprehensive documentation
@@ -685,9 +706,12 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         # Write only the raw mermaid diagram to the file
         with open(diagram_path, 'w') as f:
             f.write(diagram)
+
     except Exception as e:
         tqdm.write(f"Error creating data flow diagram: {str(e)}")
         traceback.print_exc()
+
+    return doc_contents
 
 def main():
     # Parse command line arguments
