@@ -237,16 +237,17 @@ def generate_documentation(code, file_path):
     """Generate documentation using Bedrock"""
     prompt = (
         f"<s><instructions>\nYou are an expert software engineer and technical writer. "
-        f"Your task is to analyze this file and generate comprehensive documentation about the code within.\n\n"
+        f"Your task is to analyze this file and generate concise but technically detailed documentation.\n\n"
         f"Please provide:\n"
-        f"1. A high-level overview of the code's purpose and functionality\n"
-        f"2. Detailed description of key components, classes, and functions\n"
-        f"3. Explanation of important algorithms, data structures, or patterns used\n"
-        f"4. Any security considerations or potential vulnerabilities\n"
-        f"5. Dependencies and integration points with other systems\n\n"
-        f"Format your response in clear, well-structured markdown. Refer to the code by either its name '{os.path.basename(file_path)}' or a classname or function name found in the code."
-        f"Use appropriate headings, code blocks, and bullet points for readability. "
-        f"Focus on making the documentation useful for both developers and security engineers.\n</instructions>\n\n"
+        f"1. A single-sentence overview of the file's purpose\n"
+        f"2. Key technical components (classes, functions, data structures) with their specific purposes\n"
+        f"3. Critical algorithms, patterns, or technical implementations\n"
+        f"4. Security considerations specific to the code's functionality\n"
+        f"5. Core dependencies and integration points (ignore third-party library details)\n\n"
+        f"Format your response in clear, concise markdown. "
+        f"Focus on technical implementation details and avoid verbose descriptions. "
+        f"Reference code elements by their exact names from the file.\n"
+        f"Keep each section brief but information-dense.\n</instructions>\n\n"
         f"<code>\n{code}</code>\n\n"
         f"Documentation:"
     )
@@ -280,18 +281,26 @@ def generate_threat_model_diagram(summary):
         f"   - [(name)] for data stores\n"
         f"   - {{{{name}}}} for security controls\n"
         f"   - >name] for outputs\n\n"
-        f"3. Data Flow Labels MUST:\n"
+        f"3. Node Labels MUST:\n"
+        f"   - Extract ACTUAL application name from the documentation (e.g., if docs mention 'MyApp', use 'MyApp')\n"
+        f"   - Extract ACTUAL service names from the documentation (e.g., if docs mention 'auth-service', use 'auth-service')\n"
+        f"   - Extract ACTUAL database names from the documentation (e.g., if docs mention 'users-db', use 'users-db')\n"
+        f"   - Extract ACTUAL API service names from the documentation (e.g., if docs mention 'orders-api', use 'orders-api')\n"
+        f"   - NEVER use generic names like 'example.com' or 'Web Browser'\n"
+        f"   - NEVER make up names - use ONLY names found in the documentation\n\n"
+        f"4. Data Flow Labels MUST:\n"
         f"   - Use ONLY alphanumeric characters, spaces, and underscores in labels\n"
         f"   - NO special characters like /, (, ), [, ], {{, }}, etc.\n"
-        f"   - Use EXACT data types/objects from the code (e.g., 'JiraTicket', 'UserCredentials')\n"
-        f"   - For API endpoints, use format: 'api_tickets_create' instead of 'POST /api/tickets'\n"
-        f"   - For state changes, use format: 'raw_to_validated' instead of 'Raw → Validated'\n"
-        f"   - For data fields, use format: 'user_id_roles' instead of '{{user_id, roles}}'\n"
+        f"   - Be SPECIFIC about the data being transmitted (e.g., 'user_login_credentials' instead of 'auth_request')\n"
+        f"   - Include the type of data (e.g., 'user_profile_data' instead of 'http_request')\n"
+        f"   - For API endpoints, use format: 'create_user_profile_data' instead of 'api_tickets_create'\n"
+        f"   - For state changes, use format: 'raw_user_data_to_validated' instead of 'raw_to_validated'\n"
+        f"   - For data fields, use format: 'user_id_and_permissions' instead of 'user_id_roles'\n"
         f"   - Use actual field names and types from the documentation\n\n"
-        f"4. Trust Boundaries:\n"
+        f"5. Trust Boundaries:\n"
         f"   - Use subgraphs with descriptive names based on actual system zones\n"
         f"   - Label cross-boundary data flows with specific protocols/methods\n"
-        f"   - Use format: 'http_request' instead of 'HTTP/HTTPS'\n\n"
+        f"   - Use format: 'encrypted_user_credentials' instead of 'http_request'\n\n"
         f"Example structure (using specific data types):\n"
         f"```mermaid\n"
         f"flowchart TD\n"
@@ -303,39 +312,39 @@ def generate_threat_model_diagram(summary):
         f"    classDef external fill:#fdb,stroke:#333,stroke-width:2px\n"
         f"    \n"
         f"    %% Trust Boundaries\n"
-        f"    subgraph ClientZone[Browser Context]\n"
+        f"    subgraph ClientZone[MyApp]\n"
         f"        User((Customer))\n"
-        f"        Browser[Web Client]\n"
+        f"        Frontend[MyApp Frontend]\n"
         f"    end\n"
         f"    \n"
-        f"    subgraph APIZone[API Context]\n"
-        f"        Auth{{{{JWT Validation}}}}\n"
-        f"        API[Order Service]\n"
-        f"        DB[(Order Database)]\n"
+        f"    subgraph APIZone[MyApp API]\n"
+        f"        Auth{{{{auth-service}}}}\n"
+        f"        API[orders-service]\n"
+        f"        DB[(orders-db)]\n"
         f"    end\n"
         f"    \n"
         f"    %% Data Flows with Specific Types\n"
-        f"    User -->|customer_credentials| Browser\n"
-        f"    Browser -->|auth_request| Auth\n"
-        f"    Auth -->|validated_session| API\n"
-        f"    API -->|insert_order| DB\n"
-        f"    DB -->|select_order| API\n"
-        f"    API -->|order_confirmation| Browser\n"
+        f"    User -->|user_login_credentials| Frontend\n"
+        f"    Frontend -->|encrypted_user_credentials| Auth\n"
+        f"    Auth -->|validated_user_session| API\n"
+        f"    API -->|order_transaction_data| DB\n"
+        f"    DB -->|order_details_data| API\n"
+        f"    API -->|order_confirmation_data| Frontend\n"
         f"    \n"
         f"    %% Apply styles\n"
         f"    class User user\n"
         f"    class Auth control\n"
         f"    class API process\n"
         f"    class DB storage\n"
-        f"    class Browser process\n"
+        f"    class Frontend process\n"
         f"```\n\n"
         f"IMPORTANT:\n"
-        f"1. Extract SPECIFIC data types and fields from the documentation\n"
-        f"2. Convert all API endpoints to safe format (e.g., 'api_tickets_create')\n"
+        f"1. Extract ACTUAL application and service names from the documentation - NEVER use generic examples\n"
+        f"2. Convert all API endpoints to safe format but include data type (e.g., 'create_user_profile_data')\n"
         f"3. Show REAL data transformations between components\n"
         f"4. Label boundaries based on ACTUAL system architecture\n"
         f"5. Include only components and flows from documentation\n"
-        f"6. Make data flow labels as specific as possible\n"
+        f"6. Make data flow labels as specific as possible about the actual data being transmitted\n"
         f"7. Return ONLY the mermaid.js diagram\n"
         f"8. Use ONLY safe characters in labels (alphanumeric, spaces, underscores)\n\n"
         f"Documentation to analyze:\n{summary}\n"
@@ -367,31 +376,31 @@ def generate_threat_model_diagram(summary):
     classDef external fill:#fdb,stroke:#333,stroke-width:2px
 
     %% Trust Boundaries
-    subgraph ClientZone[Browser Context]
+    subgraph ClientZone[MyApp]
         User((Customer))
-        Browser[Web Client]
+        Frontend[MyApp Frontend]
     end
 
-    subgraph APIZone[API Context]
-        Auth{{JWT Validation}}
-        API[Order Service]
-        DB[(Order Database)]
+    subgraph APIZone[MyApp API]
+        Auth{{auth-service}}
+        API[orders-service]
+        DB[(orders-db)]
     end
 
     %% Data Flows with Specific Types
-    User -->|customer_credentials| Browser
-    Browser -->|auth_request| Auth
-    Auth -->|validated_session| API
-    API -->|insert_order| DB
-    DB -->|select_order| API
-    API -->|order_confirmation| Browser
+    User -->|user_login_credentials| Frontend
+    Frontend -->|encrypted_user_credentials| Auth
+    Auth -->|validated_user_session| API
+    API -->|order_transaction_data| DB
+    DB -->|order_details_data| API
+    API -->|order_confirmation_data| Frontend
 
     %% Apply styles
     class User user
     class Auth control
     class API process
     class DB storage
-    class Browser process"""
+    class Frontend process"""
 
 def get_gitignore_spec(repo_path):
     """Load .gitignore patterns into a GitIgnoreSpec"""
