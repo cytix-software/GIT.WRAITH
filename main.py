@@ -15,6 +15,7 @@ import bottle
 from server import *
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+from tqdm import tqdm
 
 # Initialize Bedrock client for AI model access
 bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
@@ -235,29 +236,29 @@ def get_language_config(enable_langs: Optional[List[str]] = None,
 def generate_documentation(code, file_path):
     """Generate documentation using Bedrock"""
     prompt = (
-        f"<s>[INST] You are an expert software engineer and technical writer. "
-        f"Your task is to analyze the following code and generate comprehensive documentation.\n\n"
-        f"Code:\n{code}\n\n"
+        f"<s><instructions>\nYou are an expert software engineer and technical writer. "
+        f"Your task is to analyze this file and generate comprehensive documentation about the code within.\n\n"
         f"Please provide:\n"
         f"1. A high-level overview of the code's purpose and functionality\n"
         f"2. Detailed description of key components, classes, and functions\n"
         f"3. Explanation of important algorithms, data structures, or patterns used\n"
         f"4. Any security considerations or potential vulnerabilities\n"
         f"5. Dependencies and integration points with other systems\n\n"
-        f"Format your response in clear, well-structured markdown. "
+        f"Format your response in clear, well-structured markdown. Refer to the code by either its name '{os.path.basename(file_path)}' or a classname or function name found in the code."
         f"Use appropriate headings, code blocks, and bullet points for readability. "
-        f"Focus on making the documentation useful for both developers and security engineers.\n\n"
-        f"Documentation: [/INST]"
+        f"Focus on making the documentation useful for both developers and security engineers.\n</instructions>\n\n"
+        f"<code>\n{code}</code>\n\n"
+        f"Documentation:"
     )
     return bedrock_generate(prompt)
 
-def generate_summary(documentation):
+def generate_summary(documentation, file_path):
     """Generate a summary of the documentation"""
     prompt = (
         f"<s><instructions>You are an expert software engineer and technical writer. "
-        f"Your task is to analyze the following documentation and generate a concise summary, up to 3 sentences long.\n\n"
+        f"Your task is to analyze this file and generate a concise summary, up to 3 sentences long. Refer to the code by either its name '{os.path.basename(file_path)}' or a classname or function name found in the file.''\n\n"
         f"</instructions>\n"
-        f"<documentation>\n{documentation}\n</documentation>\n"
+        f"<file>\n{documentation}\n</file>\n"
         f"Summary:"
     )
     return bedrock_generate(prompt)
@@ -493,8 +494,6 @@ def process_file(args):
     file_path = os.path.join(repo_path, repo_file_path)
     ext = os.path.splitext(file_path)[-1].lower()
     lang = next((k for k, v in config.items() if ext in v['extensions']), None)
-    if not lang:
-        return (False, None, None, None, None)
 
     try:
         with open(file_path, 'r') as f:
@@ -503,7 +502,7 @@ def process_file(args):
         section_regex = config[lang]['section_regex']
         truncated_code = truncate_code(original_code, max_tokens, section_regex)
     except Exception as e:
-        print(f"Error reading {file_path}: {str(e)}")
+        tqdm.write(f"Error reading {file_path}: {str(e)}")
         traceback.print_exc()
         return (False, None, None, None, None)
 
@@ -513,7 +512,7 @@ def process_file(args):
 
     if repo_file_path in changed_files:
         try:
-            print(f"{file_path} ({lang}) has changed, processing...")
+            tqdm.write(f"{file_path} ({lang}) has changed, processing...")
             doc = generate_documentation(truncated_code, file_path)
 
             os.makedirs(os.path.dirname(doc_path), exist_ok=True)
@@ -522,9 +521,9 @@ def process_file(args):
                 f.write(f"# {lang.capitalize()} Code Documentation\n")
                 f.write(doc)
 
-            summary = generate_summary(doc)
+            summary = generate_summary(doc, file_path)
         except Exception as e:
-            print(f"Error generating documentation for {file_path}: {str(e)}")
+            tqdm.write(f"Error generating documentation for {file_path}: {str(e)}")
             traceback.print_exc()
             return (False, None, None, None, None)
     else:
@@ -534,7 +533,7 @@ def process_file(args):
                     doc = f.read()
                 summary = cache['summaries'][repo_file_path]
         except Exception as e:
-            print(f"Error reading existing documentation for {file_path}: {str(e)}")
+            tqdm.write(f"Error reading existing documentation for {file_path}: {str(e)}")
             traceback.print_exc()
             return (False, None, None, None, None)
     return (True, repo_file_path, file_path, summary, doc)
@@ -566,7 +565,10 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             if should_ignore_file(rel_path):
                 continue
 
-            filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
+            ext = os.path.splitext(file_path)[-1].lower()
+            lang = next((k for k, v in config.items() if ext in v['extensions']), None)
+            if lang:
+                filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
 
     cache_path = os.path.join(repo_path, '.wraith.cache.json')
     changed_files, new_cache = compute_cache(repo_path, filtered_files, cache_path)
@@ -583,27 +585,30 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         cache['summaries'] = {}
 
     with ThreadPoolExecutor(max_workers=16) as executor:
-        results = executor.map(process_file, [(repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens) for repo_file_path in filtered_files])
+        #This ain't no blast from the past
+        futures = [executor.submit(process_file, (repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens)) for repo_file_path in filtered_files]
+        with tqdm(total=len(futures), miniters=1, mininterval=0.1, colour='green', position=0, desc="Generating documentation") as pbar:
+            for future in as_completed(futures):
+                success, repo_file_path, file_path, summary, doc = future.result()
+                pbar.update(1)
+                if not success:
+                    continue
 
-    for success, repo_file_path, file_path, summary, doc in results:
-        if not success:
-            continue
+                summaries.append((file_path, summary))
+                doc_contents.append((file_path, doc))
 
-        summaries.append((file_path, summary))
-        doc_contents.append((file_path, doc))
+                cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
+                if summary:
+                    cache['summaries'][repo_file_path] = summary
 
-        cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
-        if summary:
-            cache['summaries'][repo_file_path] = summary
+        for path in list(cache['hashes'].keys()):
+            if path not in new_cache['hashes']:
+                del cache['hashes'][path]
+                if path in cache['summaries']:
+                    del cache['summaries'][path]
 
-    for path in list(cache['hashes'].keys()):
-        if path not in new_cache['hashes']:
-            del cache['hashes'][path]
-            if path in cache['summaries']:
-                del cache['summaries'][path]
-
-    with open(cache_path, 'w') as f:
-        json.dump(cache, f, indent=4)
+        with open(cache_path, 'w') as f:
+            json.dump(cache, f, indent=4)
 
     try:
         summary_path = os.path.join(repo_path, 'summary.docs.md')
@@ -612,10 +617,6 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             for path, summary in summaries:
                 rel_path = os.path.relpath(path, repo_path).replace('\\', '/')
                 f.write(f"## {rel_path}\n\n{summary}\n\n")
-                f.write("### Detailed Documentation\n\n")
-                for doc_path, doc in doc_contents:
-                    if doc_path == path:
-                        f.write(f"{doc}\n\n")
     except Exception as e:
         print(f"Error creating summary: {str(e)}")
 

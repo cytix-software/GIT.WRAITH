@@ -6,3 +6,4 @@ pathspec
 boto3
 bottle
 gitpython
+tqdm
