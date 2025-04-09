@@ -281,13 +281,17 @@ def generate_threat_model_diagram(summary):
         f"   - {{{{name}}}} for security controls\n"
         f"   - >name] for outputs\n\n"
         f"3. Data Flow Labels MUST:\n"
+        f"   - Use ONLY alphanumeric characters, spaces, and underscores in labels\n"
+        f"   - NO special characters like /, (, ), [, ], {{, }}, etc.\n"
         f"   - Use EXACT data types/objects from the code (e.g., 'JiraTicket', 'UserCredentials')\n"
-        f"   - Include specific operations (e.g., 'POST /api/tickets', 'GET /users/{{id}}')\n"
-        f"   - Show state changes (e.g., 'Raw JiraTicket → Validated JiraTicket')\n"
+        f"   - For API endpoints, use format: 'api_tickets_create' instead of 'POST /api/tickets'\n"
+        f"   - For state changes, use format: 'raw_to_validated' instead of 'Raw → Validated'\n"
+        f"   - For data fields, use format: 'user_id_roles' instead of '{{user_id, roles}}'\n"
         f"   - Use actual field names and types from the documentation\n\n"
         f"4. Trust Boundaries:\n"
         f"   - Use subgraphs with descriptive names based on actual system zones\n"
-        f"   - Label cross-boundary data flows with specific protocols/methods\n\n"
+        f"   - Label cross-boundary data flows with specific protocols/methods\n"
+        f"   - Use format: 'http_request' instead of 'HTTP/HTTPS'\n\n"
         f"Example structure (using specific data types):\n"
         f"```mermaid\n"
         f"flowchart TD\n"
@@ -311,12 +315,12 @@ def generate_threat_model_diagram(summary):
         f"    end\n"
         f"    \n"
         f"    %% Data Flows with Specific Types\n"
-        f"    User -->|CustomerCredentials| Browser\n"
-        f"    Browser -->|POST /auth {{username, password}}| Auth\n"
-        f"    Auth -->|ValidatedSession {{user_id, roles}}| API\n"
-        f"    API -->|INSERT OrderRecord {{id, items: array, total}}| DB\n"
-        f"    DB -->|SELECT OrderDetails| API\n"
-        f"    API -->|OrderConfirmation {{order_id, status}}| Browser\n"
+        f"    User -->|customer_credentials| Browser\n"
+        f"    Browser -->|auth_request| Auth\n"
+        f"    Auth -->|validated_session| API\n"
+        f"    API -->|insert_order| DB\n"
+        f"    DB -->|select_order| API\n"
+        f"    API -->|order_confirmation| Browser\n"
         f"    \n"
         f"    %% Apply styles\n"
         f"    class User user\n"
@@ -327,12 +331,13 @@ def generate_threat_model_diagram(summary):
         f"```\n\n"
         f"IMPORTANT:\n"
         f"1. Extract SPECIFIC data types and fields from the documentation\n"
-        f"2. Use ACTUAL API endpoints and methods\n"
+        f"2. Convert all API endpoints to safe format (e.g., 'api_tickets_create')\n"
         f"3. Show REAL data transformations between components\n"
         f"4. Label boundaries based on ACTUAL system architecture\n"
         f"5. Include only components and flows from documentation\n"
         f"6. Make data flow labels as specific as possible\n"
-        f"7. Return ONLY the mermaid.js diagram\n\n"
+        f"7. Return ONLY the mermaid.js diagram\n"
+        f"8. Use ONLY safe characters in labels (alphanumeric, spaces, underscores)\n\n"
         f"Documentation to analyze:\n{summary}\n"
         f"[/INST]"
     )
@@ -348,9 +353,9 @@ def generate_threat_model_diagram(summary):
         required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
         if not all(x in diagram for x in required_elements):
             raise ValueError("Invalid diagram structure")
-
+            
         return diagram
-
+        
     except Exception as e:
         print(f"Error generating threat model diagram: {str(e)}")
         return """flowchart TD
@@ -374,12 +379,12 @@ def generate_threat_model_diagram(summary):
     end
 
     %% Data Flows with Specific Types
-    User -->|CustomerCredentials| Browser
-    Browser -->|POST /auth {{username, password}}| Auth
-    Auth -->|ValidatedSession {{user_id, roles}}| API
-    API -->|INSERT OrderRecord {{id, items: array, total}}| DB
-    DB -->|SELECT OrderDetails| API
-    API -->|OrderConfirmation {{order_id, status}}| Browser
+    User -->|customer_credentials| Browser
+    Browser -->|auth_request| Auth
+    Auth -->|validated_session| API
+    API -->|insert_order| DB
+    DB -->|select_order| API
+    API -->|order_confirmation| Browser
 
     %% Apply styles
     class User user
@@ -508,14 +513,16 @@ def process_file(args):
 
     summary = ""
     doc = ""
-    doc_path = os.path.join(os.path.dirname(file_path), os.path.basename(file_path) + '.docs.md')
+    # Store individual file documentation in the files subdirectory
+    docs_dir = os.path.join(repo_path, '.git_wraith_docs')
+    files_dir = os.path.join(docs_dir, 'files')
+    os.makedirs(files_dir, exist_ok=True)
+    doc_path = os.path.join(files_dir, f"{os.path.basename(file_path)}.docs.md")
 
     if repo_file_path in changed_files:
         try:
             tqdm.write(f"{file_path} ({lang}) has changed, processing...")
             doc = generate_documentation(truncated_code, file_path)
-
-            os.makedirs(os.path.dirname(doc_path), exist_ok=True)
 
             with open(doc_path, 'w') as f:
                 f.write(f"# {lang.capitalize()} Code Documentation\n")
@@ -538,12 +545,17 @@ def process_file(args):
             return (False, None, None, None, None)
     return (True, repo_file_path, file_path, summary, doc)
 
-
 def process_repository(repo_path: str, config: Dict, max_tokens: int):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
     doc_contents = []  # Store full documentation content
     spec = get_gitignore_spec(repo_path)
+
+    # Create documentation directories
+    docs_dir = os.path.join(repo_path, '.git_wraith_docs')
+    files_dir = os.path.join(docs_dir, 'files')
+    os.makedirs(docs_dir, exist_ok=True)
+    os.makedirs(files_dir, exist_ok=True)
 
     # Filter out ignored files
     filtered_files = []
@@ -570,7 +582,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
             if lang:
                 filtered_files.append(os.path.relpath(os.path.abspath(os.path.join(root, file)), os.path.abspath(repo_path)))
 
-    cache_path = os.path.join(repo_path, '.wraith.cache.json')
+    cache_path = os.path.join(docs_dir, '.wraith.cache.json')
     changed_files, new_cache = compute_cache(repo_path, filtered_files, cache_path)
 
     try:
@@ -585,7 +597,6 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         cache['summaries'] = {}
 
     with ThreadPoolExecutor(max_workers=16) as executor:
-        #This ain't no blast from the past
         futures = [executor.submit(process_file, (repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens)) for repo_file_path in filtered_files]
         with tqdm(total=len(futures), miniters=1, mininterval=0.1, colour='green', position=0, desc="Generating documentation") as pbar:
             for future in as_completed(futures):
@@ -601,17 +612,17 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
                 if summary:
                     cache['summaries'][repo_file_path] = summary
 
-        for path in list(cache['hashes'].keys()):
-            if path not in new_cache['hashes']:
-                del cache['hashes'][path]
-                if path in cache['summaries']:
-                    del cache['summaries'][path]
+    for path in list(cache['hashes'].keys()):
+        if path not in new_cache['hashes']:
+            del cache['hashes'][path]
+            if path in cache['summaries']:
+                del cache['summaries'][path]
 
-        with open(cache_path, 'w') as f:
-            json.dump(cache, f, indent=4)
+    with open(cache_path, 'w') as f:
+        json.dump(cache, f, indent=4)
 
     try:
-        summary_path = os.path.join(repo_path, 'summary.docs.md')
+        summary_path = os.path.join(docs_dir, 'summary.docs.md')
         with open(summary_path, 'w') as f:
             f.write("# Repository Overview\n\n")
             for path, summary in summaries:
@@ -621,7 +632,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         print(f"Error creating summary: {str(e)}")
 
     # Generate data flow diagram
-    diagram_path = os.path.join(repo_path, 'system-dataflow.md')
+    diagram_path = os.path.join(docs_dir, 'system-dataflow.md')
     try:
         print(f"Documentation generated, generating threat model diagram...")
         # Generate the diagram using the comprehensive documentation
@@ -630,6 +641,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         # Write only the raw mermaid diagram to the file
         with open(diagram_path, 'w') as f:
             f.write(diagram)
+            
     except Exception as e:
         print(f"Error creating data flow diagram: {str(e)}")
 
