@@ -211,7 +211,7 @@ def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v
         "top_p": 0.8
     }
 
-    max_retries = 5
+    max_retries = 10
     initial_delay = 1.0  # seconds
     backoff_factor = 2
     jitter = 0.1  # 10% jitter
@@ -238,14 +238,15 @@ def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'ThrottlingException' and attempt < max_retries:
+                tqdm.write(f"Error invoking Bedrock model. Attempt: {attempt}, Error: {error_code} {str(e)}; Retrying...")
                 # Calculate delay with exponential backoff and jitter
                 delay = initial_delay * (backoff_factor ** attempt)
                 delay *= random.uniform(1 - jitter, 1 + jitter)
                 time.sleep(delay)
                 continue
             else:
+                tqdm.write(f"Error invoking Bedrock model. Attempt: {attempt}, Error: {error_code} {str(e)}")
                 # Re-raise the exception if it's not a ThrottlingException or retries are exhausted
-                tqdm.write(f"Error invoking Bedrock model: {str(e)}")
                 return ""
         except Exception as e:
             # Handle any other exceptions that occur during the API call
@@ -577,7 +578,7 @@ def process_file(args):
     summary = ""
     doc = ""
     # Store individual file documentation in the files subdirectory
-    docs_dir = os.path.join(repo_path, '.git_wraith_docs')
+    docs_dir = os.path.join(repo_path, 'wraith.docs')
     files_dir = os.path.join(docs_dir, 'files')
     os.makedirs(files_dir, exist_ok=True)
     doc_path = os.path.join(files_dir, f"{os.path.basename(file_path)}.docs.md")
@@ -615,7 +616,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
     spec = get_gitignore_spec(repo_path)
 
     # Create documentation directories
-    docs_dir = os.path.join(repo_path, '.git_wraith_docs')
+    docs_dir = os.path.join(repo_path, 'wraith.docs')
     files_dir = os.path.join(docs_dir, 'files')
     os.makedirs(docs_dir, exist_ok=True)
     os.makedirs(files_dir, exist_ok=True)
