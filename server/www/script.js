@@ -43,7 +43,6 @@ demoButton.addEventListener("click", async (e) => {
   }
 
   const markdownOutput = out.reduce((str, [fileName, content]) => str += `# ${fileName}\n${content}\n\n`, '')
-  console.log(markdownOutput)
   demoOutput(markdownOutput);
 });
 
