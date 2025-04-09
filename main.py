@@ -13,6 +13,8 @@ import traceback
 import hashlib
 import bottle
 from server import *
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 # Initialize Bedrock client for AI model access
 bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
@@ -265,7 +267,7 @@ def generate_summary(documentation):
 # potential race conditions, security vulnerabilities, and business rule violations.
 # Input: documentation (str) - documentation to analyze, lang (str) - programming language
 # Output: str - numbered list of identified potential flaws with descriptions
-def generate_threat_model(summary):
+def generate_threat_model_diagram(summary):
     """Generate a security-focused threat model diagram using mermaid.js"""
     prompt = (
         f"<s>You are an expert security architect. Create a threat model diagram based on the provided documentation.\n\n"
@@ -333,21 +335,21 @@ def generate_threat_model(summary):
         f"Documentation to analyze:\n{summary}\n"
         f"[/INST]"
     )
-    
+
     try:
         diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
-        
+
         if "```mermaid" in diagram:
             diagram = diagram[diagram.find("```mermaid"):diagram.rfind("```")]
             diagram = diagram.replace("```mermaid", "").replace("```", "").strip()
-        
+
         # Ensure the diagram has the required elements
         required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
         if not all(x in diagram for x in required_elements):
             raise ValueError("Invalid diagram structure")
-                
+
         return diagram
-        
+
     except Exception as e:
         print(f"Error generating threat model diagram: {str(e)}")
         return """flowchart TD
@@ -357,19 +359,19 @@ def generate_threat_model(summary):
     classDef storage fill:#dfd,stroke:#333,stroke-width:2px
     classDef control fill:#fff,stroke:#f66,stroke-width:3px
     classDef external fill:#fdb,stroke:#333,stroke-width:2px
-    
+
     %% Trust Boundaries
     subgraph ClientZone[Browser Context]
         User((Customer))
         Browser[Web Client]
     end
-    
+
     subgraph APIZone[API Context]
         Auth{{JWT Validation}}
         API[Order Service]
         DB[(Order Database)]
     end
-    
+
     %% Data Flows with Specific Types
     User -->|CustomerCredentials| Browser
     Browser -->|POST /auth {{username, password}}| Auth
@@ -377,7 +379,7 @@ def generate_threat_model(summary):
     API -->|INSERT OrderRecord {{id, items: array, total}}| DB
     DB -->|SELECT OrderDetails| API
     API -->|OrderConfirmation {{order_id, status}}| Browser
-    
+
     %% Apply styles
     class User user
     class Auth control
@@ -486,12 +488,64 @@ def should_ignore_file(file_path: str) -> bool:
 
     return False
 
+def process_file(args):
+    repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens = args
+    file_path = os.path.join(repo_path, repo_file_path)
+    ext = os.path.splitext(file_path)[-1].lower()
+    lang = next((k for k, v in config.items() if ext in v['extensions']), None)
+    if not lang:
+        return (False, None, None, None, None)
+
+    try:
+        with open(file_path, 'r') as f:
+            original_code = f.read()
+
+        section_regex = config[lang]['section_regex']
+        truncated_code = truncate_code(original_code, max_tokens, section_regex)
+    except Exception as e:
+        print(f"Error reading {file_path}: {str(e)}")
+        traceback.print_exc()
+        return (False, None, None, None, None)
+
+    summary = ""
+    doc = ""
+    doc_path = os.path.join(os.path.dirname(file_path), os.path.basename(file_path) + '.docs.md')
+
+    if repo_file_path in changed_files:
+        try:
+            print(f"{file_path} ({lang}) has changed, processing...")
+            doc = generate_documentation(truncated_code, file_path)
+
+            os.makedirs(os.path.dirname(doc_path), exist_ok=True)
+
+            with open(doc_path, 'w') as f:
+                f.write(f"# {lang.capitalize()} Code Documentation\n")
+                f.write(doc)
+
+            summary = generate_summary(doc)
+        except Exception as e:
+            print(f"Error generating documentation for {file_path}: {str(e)}")
+            traceback.print_exc()
+            return (False, None, None, None, None)
+    else:
+        try:
+            if os.path.exists(doc_path):
+                with open(doc_path, 'r') as f:
+                    doc = f.read()
+                summary = cache['summaries'][repo_file_path]
+        except Exception as e:
+            print(f"Error reading existing documentation for {file_path}: {str(e)}")
+            traceback.print_exc()
+            return (False, None, None, None, None)
+    return (True, repo_file_path, file_path, summary, doc)
+
+
 def process_repository(repo_path: str, config: Dict, max_tokens: int):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
     doc_contents = []  # Store full documentation content
     spec = get_gitignore_spec(repo_path)
-    
+
     # Filter out ignored files
     filtered_files = []
     for root, dirs, files in os.walk(repo_path, topdown=True):
@@ -516,85 +570,40 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
 
     cache_path = os.path.join(repo_path, '.wraith.cache.json')
     changed_files, new_cache = compute_cache(repo_path, filtered_files, cache_path)
-    
-    # Process remaining files
-    for repo_file_path in filtered_files:
-        file_path = os.path.join(repo_path, repo_file_path)
-        ext = os.path.splitext(file_path)[-1].lower()
-        lang = next((k for k, v in config.items() if ext in v['extensions']), None)
 
-        if not lang:
+    try:
+        with open(cache_path, 'r') as f:
+            cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        cache = {'hashes': {}, 'summaries': {}}
+
+    if 'hashes' not in cache:
+        cache['hashes'] = {}
+    if 'summaries' not in cache:
+        cache['summaries'] = {}
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        results = executor.map(process_file, [(repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens) for repo_file_path in filtered_files])
+
+    for success, repo_file_path, file_path, summary, doc in results:
+        if not success:
             continue
 
-        print(f"Processing: {file_path}")
-
-        try:
-            with open(file_path, 'r') as f:
-                original_code = f.read()
-
-            section_regex = config[lang]['section_regex']
-            truncated_code = truncate_code(original_code, max_tokens, section_regex)
-        except Exception as e:
-            print(f"Error reading {file_path}: {str(e)}")
-            traceback.print_exc()
-            continue
-
-        summary = ""
-        doc = ""
-        doc_path = os.path.join(os.path.dirname(file_path), os.path.basename(file_path) + '.docs.md')
-        
-        if repo_file_path in changed_files:
-            print("File has changed since last run, regenerating documentation")
-            try:
-                doc = generate_documentation(truncated_code, file_path)
-                
-                os.makedirs(os.path.dirname(doc_path), exist_ok=True)
-                
-                with open(doc_path, 'w') as f:
-                    f.write(f"# {lang.capitalize()} Code Documentation\n")
-                    f.write(doc)
-
-                summary = generate_summary(doc)
-                summaries.append((file_path, summary))
-                doc_contents.append((file_path, doc))
-            except Exception as e:
-                print(f"Error generating documentation for {file_path}: {str(e)}")
-                continue
-        else:
-            try:
-                if os.path.exists(doc_path):
-                    with open(doc_path, 'r') as f:
-                        doc = f.read()
-                    summary = generate_summary(doc)
-                    summaries.append((file_path, summary))
-                    doc_contents.append((file_path, doc))
-            except Exception as e:
-                print(f"Error reading existing documentation for {file_path}: {str(e)}")
-                continue
-
-        try:
-            with open(cache_path, 'r') as f:
-                cache = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            cache = {'hashes': {}, 'summaries': {}}
-
-        if 'hashes' not in cache:
-            cache['hashes'] = {}
-        if 'summaries' not in cache:
-            cache['summaries'] = {}
+        summaries.append((file_path, summary))
+        doc_contents.append((file_path, doc))
 
         cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
         if summary:
             cache['summaries'][repo_file_path] = summary
 
-        for path in list(cache['hashes'].keys()):
-            if path not in new_cache['hashes']:
-                del cache['hashes'][path]
-                if path in cache['summaries']:
-                    del cache['summaries'][path]
+    for path in list(cache['hashes'].keys()):
+        if path not in new_cache['hashes']:
+            del cache['hashes'][path]
+            if path in cache['summaries']:
+                del cache['summaries'][path]
 
-        with open(cache_path, 'w') as f:
-            json.dump(cache, f, indent=4)
+    with open(cache_path, 'w') as f:
+        json.dump(cache, f, indent=4)
 
     try:
         summary_path = os.path.join(repo_path, 'summary.docs.md')
@@ -611,11 +620,12 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
         print(f"Error creating summary: {str(e)}")
 
     # Generate data flow diagram
-    diagram_path = os.path.join(repo_path, 'system-dataflow.mmd')
+    diagram_path = os.path.join(repo_path, 'system-dataflow.md')
     try:
+        print(f"Documentation generated, generating threat model diagram...")
         # Generate the diagram using the comprehensive documentation
-        diagram = generate_threat_model(". ".join([f"Path: {path}, summary: {summary}" for path, summary in summaries]))
-        
+        diagram = generate_threat_model_diagram(". ".join([f"Path: {path}, summary: {summary}" for path, summary in summaries]))
+
         # Write only the raw mermaid diagram to the file
         with open(diagram_path, 'w') as f:
             f.write(diagram)
@@ -661,9 +671,9 @@ def main():
         except Exception as e:
             print(f"Processing failed: {e}")
             traceback.print_exc()
-
-    # Start HTTP server
-    bottle.run(host='0.0.0.0', port=3000, debug=True, reloader=True)
+    else:
+        # Boot the HTTP server if we're not trying to process a specific repo
+        bottle.run(host='0.0.0.0', port=3000, debug=True, reloader=True)
 
 
 if __name__ == '__main__':
