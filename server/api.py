@@ -22,7 +22,7 @@ def scan():
   from main import process_repository, LANGUAGE_CONFIG
   try:
     result = process_repository(
-      repo_path='./git_wraith_repo',
+      repo_path='./.git_wraith_repo',
       config=LANGUAGE_CONFIG
     )
     if not result:
