@@ -1,7 +1,7 @@
 # GIT.WRAITH
 
 > **GIT.WRAITH**  
-> *“Uncover the invisible. Document the indefensible.”*
+> *“Document, Visualise and Validate your Code Base.”*
 
 ---
 
