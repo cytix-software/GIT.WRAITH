@@ -30,7 +30,7 @@ demoButton.addEventListener("click", async (e) => {
   outputBox.style.display = "block";
   outputBox.style.color = "#66ff66";
 
-  outputBox.innerHTML = `<p id="loading-glitch">Analyzing Repository...</p>`
+  outputBox.innerHTML = `<p id="loading-glitch" style="animation: floaty 3s ease-in-out infinite">Analyzing Repository...</p>`
 
   // Make a loading animation appear or inform the user stuff is happening
 
