@@ -33,4 +33,5 @@ def scan():
     return json.dumps(result)
   except Exception as e:
     response.status = 500
+    print(e)
     return e

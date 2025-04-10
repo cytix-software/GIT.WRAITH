@@ -609,7 +609,7 @@ def process_file(args):
             return (False, None, None, None, None)
     return (True, repo_file_path, file_path, summary, doc)
 
-def process_repository(repo_path: str, config: Dict, max_tokens: int):
+def process_repository(repo_path: str, config: Dict, max_tokens: int = 8000):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
     doc_contents = []  # Store full documentation content
