@@ -42,13 +42,13 @@ demoButton.addEventListener("click", async (e) => {
     return error("Failed to parse JSON data.");
   }
 
-  demoOutput(out.files, out.mermaidStr);
+  demoOutput(out.files);
 });
 
 const outputBox = document.getElementById("demo-success");
 
 /** Make the demo output box visible and enter markdown into it */
-function demoOutput(files, mermaidStr) {
+function demoOutput(files) {
   outputBox.style.display = "block";
   outputBox.style.color = "#66ff66";
 
@@ -65,14 +65,15 @@ function demoOutput(files, mermaidStr) {
       (str += `<div class="file-box">
     <div class="file-title">${fileName}</div>
     <div class="file-description">${marked.parse(content)}</div>
-  </div>`, '')
+  </div>`),
+    ""
   );
 
   outputBox.innerHTML =
     `<p><strong>Analysis Results for Repository: <span>${url.pathname.slice(
       1
     )}</span></strong></p>` +
-    `<pre class="mermaid">${mermaidStr}</pre>` +
+    `<a href="./diagram" target="_blank">View diagram</a>` +
     htmlContent;
 }
 
