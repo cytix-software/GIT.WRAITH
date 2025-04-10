@@ -42,14 +42,13 @@ demoButton.addEventListener("click", async (e) => {
     return error("Failed to parse JSON data.");
   }
 
-  const markdownOutput = out.reduce((str, [fileName, content]) => str += `# ${fileName}\n${content}\n\n`, '')
-  demoOutput(markdownOutput);
+  demoOutput(out);
 });
 
 const outputBox = document.getElementById("demo-success");
 
 /** Make the demo output box visible and enter markdown into it */
-function demoOutput(markdown) {
+function demoOutput(files) {
   outputBox.style.display = "block";
   outputBox.style.color = "#66ff66";
 
@@ -61,11 +60,18 @@ function demoOutput(markdown) {
   }
 
   // Convert the markdown to HTML using `marked`
-  const htmlContent = marked.parse(markdown);
+  const htmlContent = files.reduce(
+    (str, [fileName, content]) =>
+      (str += `<div class="file-box">
+    <div class="file-title">${fileName}</div>
+    <div class="file-description">${marked(content)}</div>
+  </div>`)
+  );
 
   outputBox.innerHTML =
-    `<p><strong>Analysis Results for Repository: <span>${url.pathname.slice(1)}</span></strong></p>`
-    + htmlContent;
+    `<p><strong>Analysis Results for Repository: <span>${url.pathname.slice(
+      1
+    )}</span></strong></p>` + htmlContent;
 }
 
 /** Display an error in the output box */

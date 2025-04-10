@@ -206,3 +206,51 @@ button:hover {
   border-radius: 10px;
   display: none;
 }
+
+.diagram-container {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.diagram-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 0 20px rgba(255, 76, 76, 0.2);
+  border: 2px solid #444;
+}
+
+.file-box {
+  background-color: #1a1a1a;
+  border: 1px solid #444;
+  border-left: 5px solid #ff4c4c;
+  border-radius: 8px;
+  padding: 15px;
+  margin: 20px 0;
+  box-shadow: 0 0 12px rgba(255, 76, 76, 0.1);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.file-box:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 0 18px rgba(255, 76, 76, 0.3);
+}
+
+.file-title {
+  font-size: 1.5em;
+  color: #00ffcc;
+  margin-bottom: 10px;
+  font-weight: bold;
+  border-bottom: 1px dashed #00ffcc;
+  padding-bottom: 5px;
+}
+
+.file-description {
+  font-size: 1.1em;
+  line-height: 1.6;
+  color: #ccc;
+}
+
+.file-description p {
+  margin-bottom: 10px;
+}
