@@ -19,6 +19,30 @@ from tqdm import tqdm
 import random
 from botocore.exceptions import ClientError
 import math
+import subprocess
+import tempfile
+import os
+
+def validate_mermaid(mermaid_code: str) -> bool:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.mmd', delete=False) as f:
+        f.write(mermaid_code)
+        temp_path = f.name
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        outputFile = f.name
+    try:
+        subprocess.run(
+            ["npx", "mmdc", "-i", temp_path, "-o", outputFile],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print("Mermaid syntax error:\n", e.stderr.decode())
+        return False
+    finally:
+        os.remove(temp_path)
 
 # Initialize Bedrock client for AI model access
 bedrock = boto3.client('bedrock-runtime', region_name='eu-west-2')
@@ -192,7 +216,7 @@ import random
 import json
 from botocore.exceptions import ClientError
 
-def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v1:0') -> str:
+def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v1:0', temperature=0) -> str:
     """Generate text using AWS Bedrock AI model with exponential backoff for ThrottlingExceptions"""
     #estimate the number of tokens needed
     max_tokens = 2**math.ceil(math.log(len(prompt)/3, 2))
@@ -206,7 +230,7 @@ def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v
                 "content": prompt
             }
         ],
-        "temperature": 0,
+        "temperature": temperature,
         "top_k": 1,
         "top_p": 1.0
     }
@@ -512,74 +536,44 @@ def refine_threat_model_prompt(summaries, graph):
 def generate_threat_model_diagram(summaries):
     """Generate a security-focused threat model diagram using mermaid.js"""
 
-    #we need to add something here so that it verifies the syntax of the mermaid diagram and retries if it comes out wrong
-    try:
-        prompt = make_threat_model_prompt(summaries)
+    temperature = 0
+    while True:
+        try:
+            prompt = make_threat_model_prompt(summaries)
 
-        diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
+            diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
 
-        if "```mermaid" in diagram:
-            diagram = diagram[diagram.find("```mermaid"):diagram.rfind("```")]
-            diagram = diagram.replace("```mermaid", "").replace("```", "").strip()
+            if "```mermaid" in diagram:
+                diagram = diagram[diagram.find("```mermaid"):diagram.rfind("```")]
+                diagram = diagram.replace("```mermaid", "").replace("```", "").strip()
 
-        # Ensure the diagram has the required elements
-        required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
-        if not all(x in diagram for x in required_elements):
-            raise ValueError("Invalid diagram structure")
+            # Ensure the diagram has the required elements
+            required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
+            if not all(x in diagram for x in required_elements):
+                raise ValueError("Invalid diagram structure")
 
-        prompt = refine_threat_model_prompt(summaries, diagram)
+            if not validate_mermaid(diagram):
+                raise ValueError("Invalid diagram syntax")
 
-        diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
+            prompt = refine_threat_model_prompt(summaries, diagram)
 
-        if "```mermaid" in diagram:
-            diagram = diagram[diagram.find("```mermaid"):diagram.rfind("```")]
-            diagram = diagram.replace("```mermaid", "").replace("```", "").strip()
+            diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
 
-        # Ensure the diagram has the required elements
-        required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
-        if not all(x in diagram for x in required_elements):
-            raise ValueError("Invalid diagram structure")
+            if "```mermaid" in diagram:
+                diagram = diagram[diagram.find("```mermaid"):diagram.rfind("```")]
+                diagram = diagram.replace("```mermaid", "").replace("```", "").strip()
 
-        return diagram
+            # Ensure the diagram has the required elements
+            required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
+            if not all(x in diagram for x in required_elements):
+                raise ValueError("Invalid diagram structure")
 
-    except Exception as e:
-        tqdm.write(f"Error generating threat model diagram: {str(e)}")
-        traceback.print_exc()
+            if not validate_mermaid(diagram):
+                raise ValueError("Invalid diagram syntax")
 
-        return """flowchart TD
-    %% Styles
-    classDef user fill:#fdd,stroke:#333,stroke-width:2px
-    classDef process fill:#ddf,stroke:#333,stroke-width:2px
-    classDef storage fill:#dfd,stroke:#333,stroke-width:2px
-    classDef control fill:#fff,stroke:#f66,stroke-width:3px
-    classDef external fill:#fdb,stroke:#333,stroke-width:2px
-
-    %% Trust Boundaries
-    subgraph ClientZone[MyApp]
-        User((Customer))
-        Frontend[MyApp Frontend]
-    end
-
-    subgraph APIZone[MyApp API]
-        Auth{{auth-service}}
-        API[orders-service]
-        DB[(orders-db)]
-    end
-
-    %% Data Flows with Specific Types
-    User -->|user_login_credentials| Frontend
-    Frontend -->|encrypted_user_credentials| Auth
-    Auth -->|validated_user_session| API
-    API -->|order_transaction_data| DB
-    DB -->|order_details_data| API
-    API -->|order_confirmation_data| Frontend
-
-    %% Apply styles
-    class User user
-    class Auth control
-    class API process
-    class DB storage
-    class Frontend process"""
+            return diagram
+        except ValueError as e:
+            temperature += 0.1
 
 def get_gitignore_spec(repo_path):
     """Load .gitignore patterns into a GitIgnoreSpec"""
