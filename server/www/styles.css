@@ -302,3 +302,13 @@ button:hover {
   50%  { transform: translateY(-10px); }
   100% { transform: translateY(0px); }
 }
+
+#loading-glitch {
+  font-family: 'Courier New', Courier, monospace;
+  color: #ff4c4c;
+  font-size: 1.6em;
+  text-align: center;
+  margin: 20px 0;
+  letter-spacing: 2px;
+  user-select: none;
+}

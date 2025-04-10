@@ -27,6 +27,11 @@ const gitURL = document.getElementById("git-url");
 demoButton.addEventListener("click", async (e) => {
   if (!gitURL.value) return;
 
+  outputBox.style.display = "block";
+  outputBox.style.color = "#66ff66";
+
+  outputBox.innerHTML = `<p id="loading-glitch">Analyzing Repository...</p>`
+
   // Make a loading animation appear or inform the user stuff is happening
 
   const res = await fetch("/api/scan?repo_url=" + gitURL.value);
@@ -83,4 +88,21 @@ function error(message) {
   outputBox.style.color = "red";
 
   outputBox.innerHTML = `<p>${message}</p>`;
+}
+
+const glitchTarget = document.getElementById("loading-glitch");
+const baseText = "Analyzing Repository...";
+const glitchChars = "!@#$%^&*()_+-=[]{};:'\",.<>?/\\|`~0123456789█▒▓░";
+
+if (glitchTarget) {
+  setInterval(() => {
+    const glitched = baseText.split("").map(char => {
+      if (char === " ") return " ";
+      return Math.random() < 0.2
+        ? glitchChars[Math.floor(Math.random() * glitchChars.length)]
+        : char;
+    }).join("");
+
+    glitchTarget.textContent = glitched;
+  }, 50);
 }
