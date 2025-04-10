@@ -301,13 +301,7 @@ def generate_summary(documentation, file_path):
     )
     return bedrock_generate(prompt)
 
-# Analyzes code documentation to identify potential business logic issues and vulnerabilities.
-# Identifies issues like inconsistent error handling, missing edge cases,
-# potential race conditions, security vulnerabilities, and business rule violations.
-# Input: documentation (str) - documentation to analyze, lang (str) - programming language
-# Output: str - numbered list of identified potential flaws with descriptions
-def generate_threat_model_diagram(summaries):
-    """Generate a security-focused threat model diagram using mermaid.js"""
+def make_threat_model_prompt(summaries):
     claude_max_length = 128_000/4
 
     #deal with prompts that are too large by randomly sampling the summaries, since we can't deal with everything
@@ -401,11 +395,132 @@ def generate_threat_model_diagram(summaries):
     sample_size += 1
 
     if sample_size != len(summaries):
-        tqdm.write(f"Warning: Codebase is large, reducing accuracy to {round(100/len(summaries)*sample_size)}%...") #we should calculate how much accuracy we're losing
+        tqdm.write(f"Warning: Codebase is large, reducing modelling accuracy to {round(100/len(summaries)*sample_size)}%...") #we should calculate how much accuracy we're losing
+    return prompt
 
+def refine_threat_model_prompt(summaries, graph):
+    claude_max_length = 128_000/4
+
+    #deal with prompts that are too large by randomly sampling the summaries, since we can't deal with everything
+    serialized_summary = None
+    prompt = ""
+    summaries = [f"Path: {path}, summary: {summary}" for path, summary in summaries]
+    sample_size = len(summaries)
+
+    while not serialized_summary or len(prompt) > claude_max_length:
+        serialized_summary = ". ".join(random.sample(summaries, sample_size))
+        prompt = (
+            f"<s><instructions>You are an expert security architect. Refine the given threat model based on the documentation.\n\n"
+            f"Requirements:\n"
+            f"1. Use mermaid.js flowchart TD syntax\n"
+            f"2. Node types:\n"
+            f"   - ((name)) for external entities/users\n"
+            f"   - [name] for internal processes\n"
+            f"   - [(name)] for data stores\n"
+            f"   - {{{{name}}}} for security controls\n"
+            f"   - >name] for outputs\n\n"
+            f"3. Node Labels MUST:\n"
+            f"   - Extract ACTUAL application name from the documentation (e.g., if docs mention 'MyApp', use 'MyApp')\n"
+            f"   - Extract ACTUAL service names from the documentation (e.g., if docs mention 'auth-service', use 'auth-service')\n"
+            f"   - Extract ACTUAL database names from the documentation (e.g., if docs mention 'users-db', use 'users-db')\n"
+            f"   - Extract ACTUAL API service names from the documentation (e.g., if docs mention 'orders-api', use 'orders-api')\n"
+            f"   - NEVER use generic names like 'example.com' or 'Web Browser'\n"
+            f"   - NEVER make up names - use ONLY names found in the documentation\n\n"
+            f"4. Data Flow Labels MUST:\n"
+            f"   - Use ONLY alphanumeric characters, spaces, and underscores in labels\n"
+            f"   - NO special characters like /, (, ), [, ], {{, }}, etc.\n"
+            f"   - Be SPECIFIC about the data being transmitted (e.g., 'user_login_credentials' instead of 'auth_request')\n"
+            f"   - Include the type of data (e.g., 'user_profile_data' instead of 'http_request')\n"
+            f"   - For API endpoints, use format: 'create_user_profile_data' instead of 'api_tickets_create'\n"
+            f"   - For state changes, use format: 'raw_user_data_to_validated' instead of 'raw_to_validated'\n"
+            f"   - For data fields, use format: 'user_id_and_permissions' instead of 'user_id_roles'\n"
+            f"   - Use actual field names and types from the documentation\n\n"
+            f"5. Trust Boundaries:\n"
+            f"   - Use subgraphs with descriptive names based on actual system zones\n"
+            f"   - Label cross-boundary data flows with specific protocols/methods\n"
+            f"   - Use format: 'encrypted_user_credentials' instead of 'http_request'\n\n"
+            f"Example structure (using specific data types):\n"
+            f"```mermaid\n"
+            f"flowchart TD\n"
+            f"    %% Styles\n"
+            f"    classDef user fill:#fdd,stroke:#333,stroke-width:2px\n"
+            f"    classDef process fill:#ddf,stroke:#333,stroke-width:2px\n"
+            f"    classDef storage fill:#dfd,stroke:#333,stroke-width:2px\n"
+            f"    classDef control fill:#fff,stroke:#f66,stroke-width:3px\n"
+            f"    classDef external fill:#fdb,stroke:#333,stroke-width:2px\n"
+            f"    \n"
+            f"    %% Trust Boundaries\n"
+            f"    subgraph ClientZone[MyApp]\n"
+            f"        User((Customer))\n"
+            f"        Frontend[MyApp Frontend]\n"
+            f"    end\n"
+            f"    \n"
+            f"    subgraph APIZone[MyApp API]\n"
+            f"        Auth{{{{auth-service}}}}\n"
+            f"        API[orders-service]\n"
+            f"        DB[(orders-db)]\n"
+            f"    end\n"
+            f"    \n"
+            f"    %% Data Flows with Specific Types\n"
+            f"    User -->|user_login_credentials| Frontend\n"
+            f"    Frontend -->|encrypted_user_credentials| Auth\n"
+            f"    Auth -->|validated_user_session| API\n"
+            f"    API -->|order_transaction_data| DB\n"
+            f"    DB -->|order_details_data| API\n"
+            f"    API -->|order_confirmation_data| Frontend\n"
+            f"    \n"
+            f"    %% Apply styles\n"
+            f"    class User user\n"
+            f"    class Auth control\n"
+            f"    class API process\n"
+            f"    class DB storage\n"
+            f"    class Frontend process\n"
+            f"```\n\n"
+            f"IMPORTANT:\n"
+            f"1. Extract ACTUAL application and service names from the documentation - NEVER use generic examples\n"
+            f"2. Convert all API endpoints to safe format but include data type (e.g., 'create_user_profile_data')\n"
+            f"3. Show REAL data transformations between components\n"
+            f"4. Label boundaries based on ACTUAL system architecture\n"
+            f"5. Include only components and flows from documentation\n"
+            f"6. Make data flow labels as specific as possible about the actual data being transmitted\n"
+            f"7. Return ONLY the mermaid.js diagram\n"
+            f"8. Use ONLY safe characters in labels (alphanumeric, spaces, underscores)\n\n</instructions>"
+            f"<documentation>\n{serialized_summary}</documentation>\n"
+            f"<graph>\n{graph}</graph>\n"
+            f"[/INST]"
+        )
+        sample_size -= 1
+    sample_size += 1
+
+    if sample_size != len(summaries):
+        tqdm.write(f"Warning: Codebase is large, reducing modelling accuracy to {round(100/len(summaries)*sample_size)}%...") #we should calculate how much accuracy we're losing
+    return prompt
+
+# Analyzes code documentation to identify potential business logic issues and vulnerabilities.
+# Identifies issues like inconsistent error handling, missing edge cases,
+# potential race conditions, security vulnerabilities, and business rule violations.
+# Input: documentation (str) - documentation to analyze, lang (str) - programming language
+# Output: str - numbered list of identified potential flaws with descriptions
+def generate_threat_model_diagram(summaries):
+    """Generate a security-focused threat model diagram using mermaid.js"""
 
     #we need to add something here so that it verifies the syntax of the mermaid diagram and retries if it comes out wrong
     try:
+        prompt = make_threat_model_prompt(summaries)
+
+        diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
+
+        if "```mermaid" in diagram:
+            diagram = diagram[diagram.find("```mermaid"):diagram.rfind("```")]
+            diagram = diagram.replace("```mermaid", "").replace("```", "").strip()
+
+        # Ensure the diagram has the required elements
+        required_elements = ["flowchart TD", "classDef", "-->", "subgraph"]
+        if not all(x in diagram for x in required_elements):
+            raise ValueError("Invalid diagram structure")
+
+        prompt = refine_threat_model_prompt(summaries, diagram)
+
         diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
 
         if "```mermaid" in diagram:
