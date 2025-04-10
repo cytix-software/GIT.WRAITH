@@ -206,9 +206,9 @@ def bedrock_generate(prompt: str, model_id='anthropic.claude-3-sonnet-20240229-v
                 "content": prompt
             }
         ],
-        "temperature": 0.2,
-        "top_k": 20,
-        "top_p": 0.8
+        "temperature": 0,
+        "top_k": 1,
+        "top_p": 1.0
     }
 
     max_retries = 10
@@ -404,6 +404,7 @@ def generate_threat_model_diagram(summaries):
         tqdm.write(f"Warning: Codebase is large, reducing accuracy to {round(100/len(summaries)*sample_size)}%...") #we should calculate how much accuracy we're losing
 
 
+    #we need to add something here so that it verifies the syntax of the mermaid diagram and retries if it comes out wrong
     try:
         diagram = bedrock_generate(prompt, model_id='anthropic.claude-3-sonnet-20240229-v1:0')
 
@@ -660,7 +661,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int):
     if 'summaries' not in cache:
         cache['summaries'] = {}
 
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(process_file, (repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens)) for repo_file_path in filtered_files]
         with tqdm(total=len(futures), miniters=1, mininterval=0.1, colour='green', position=0, desc="Generating documentation") as pbar:
             for future in as_completed(futures):
