@@ -34,8 +34,8 @@ def validate_mermaid(mermaid_code: str) -> bool:
         subprocess.run(
             ["npx", "mmdc", "-i", temp_path, "-o", outputFile],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
         return True
     except subprocess.CalledProcessError as e:
@@ -704,7 +704,7 @@ def process_file(args):
 
     if repo_file_path in changed_files:
         try:
-            tqdm.write(f"{file_path} ({lang}) has changed, processing...")
+            tqdm.write(f"{repo_file_path} ({lang}) has changed, processing...")
             doc = generate_documentation(truncated_code, file_path)
 
             with open(doc_path, 'w') as f:
@@ -790,7 +790,7 @@ def process_repository(repo_path: str, config: Dict):
 
 
                 #only update hashes if we succeeded
-                doc_contents.append((file_path, doc))
+                doc_contents.append((repo_file_path, file_path, doc))
                 cache['hashes'][repo_file_path] = new_cache['hashes'][repo_file_path]
 
                 if summary:

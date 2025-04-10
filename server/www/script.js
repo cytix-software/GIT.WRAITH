@@ -66,7 +66,7 @@ function demoOutput(files) {
 
   // Convert the markdown to HTML using `marked`
   const htmlContent = files.reduce(
-    (str, [fileName, content]) =>
+    (str, [fullPath, fileName, content]) =>
       (str += `<div class="file-box">
     <div class="file-title">${fileName}</div>
     <div class="file-description">${marked.parse(content)}</div>
