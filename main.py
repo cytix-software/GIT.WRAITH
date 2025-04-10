@@ -609,7 +609,7 @@ def process_file(args):
             return (False, None, None, None, None)
     return (True, repo_file_path, file_path, summary, doc)
 
-def process_repository(repo_path: str, config: Dict, max_tokens: int = 8000):
+def process_repository(repo_path: str, config: Dict):
     """Process all code files in the repository while respecting .gitignore"""
     summaries = []
     doc_contents = []  # Store full documentation content
@@ -661,7 +661,7 @@ def process_repository(repo_path: str, config: Dict, max_tokens: int = 8000):
         cache['summaries'] = {}
 
     with ThreadPoolExecutor(max_workers=16) as executor:
-        futures = [executor.submit(process_file, (repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config, max_tokens)) for repo_file_path in filtered_files]
+        futures = [executor.submit(process_file, (repo_path, repo_file_path, changed_files, cache_path, cache, new_cache, config)) for repo_file_path in filtered_files]
         with tqdm(total=len(futures), miniters=1, mininterval=0.1, colour='green', position=0, desc="Generating documentation") as pbar:
             for future in as_completed(futures):
                 success, repo_file_path, file_path, summary, doc = future.result()
@@ -718,7 +718,6 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Repository Code Processor')
     parser.add_argument('repo_path', type=str, nargs='?', default='', help='Path to the repository')
-    parser.add_argument('--max-tokens', type=int, default=8000)
     parser.add_argument('--config-file', type=str)
     parser.add_argument('--enable-languages', type=str)
     parser.add_argument('--disable-languages', type=str)
@@ -747,8 +746,7 @@ def main():
         try:
             result = process_repository(
                 args.repo_path,
-                language_config,
-                args.max_tokens
+                language_config
             )
         except Exception as e:
             tqdm.write(f"Processing failed: {e}")
