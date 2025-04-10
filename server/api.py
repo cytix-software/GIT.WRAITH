@@ -19,12 +19,11 @@ def scan():
   # Attempt to retrieve files from github URL
   files = get_repo(repo_url)
 
-  from main import process_repository, LANGUAGE_CONFIG, MAX_TOKENS
+  from main import process_repository, LANGUAGE_CONFIG
   try:
     result = process_repository(
-      repo_path='/tmp/repo',
-      config=LANGUAGE_CONFIG,
-      max_tokens=MAX_TOKENS
+      repo_path='./git_wraith_repo',
+      config=LANGUAGE_CONFIG
     )
     if not result:
       response.status = 500
@@ -34,4 +33,5 @@ def scan():
     return json.dumps(result)
   except Exception as e:
     response.status = 500
+    print(e)
     return e
