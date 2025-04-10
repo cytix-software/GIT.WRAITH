@@ -254,3 +254,18 @@ button:hover {
 .file-description p {
   margin-bottom: 10px;
 }
+
+#demo-success a {
+  color: #00ffee;
+  text-decoration: none;
+  border-bottom: 1px dashed #00ffee;
+  transition: all 0.3s ease;
+  font-weight: bold;
+}
+
+#demo-success a:hover {
+  color: #66ff66;
+  border-bottom: 1px solid #66ff66;
+  text-shadow: 0 0 8px #66ff66;
+  transform: scale(1.05);
+}
