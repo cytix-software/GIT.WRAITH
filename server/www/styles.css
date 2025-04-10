@@ -23,6 +23,8 @@ a {
 }
 
 header {
+  background: url("./bg.png");
+  
   text-align: center;
   padding: 50px 0;
   background-color: #222;
