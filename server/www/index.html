@@ -8,6 +8,9 @@
     <link rel="stylesheet" href="styles.css">
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    </script>
 </head>
 <body>
     <header>
@@ -21,11 +24,7 @@
             <input type="text" id="git-url" placeholder="Enter Git URL" />
             <button id="demo-btn">Run Demo</button>
 
-            <div id="demo-success">
-                <!-- <div class="diagram-container">
-                    <img src="diagram-placeholder.png" alt="Codebase Diagram" class="diagram-img">
-                </div> -->
-            </div>
+            <div id="demo-success"></div>
         </div>
     </section>
 

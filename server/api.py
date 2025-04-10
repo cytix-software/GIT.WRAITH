@@ -29,8 +29,16 @@ def scan():
       response.status = 500
       return { 'error': 'An unknown error occurred when generating docs.' }
 
+    try:
+        with open('./.git_wraith_repo/wraith.docs/system-dataflow.md', 'r') as f:
+            mermaidStr = f.read()
+    except Exception as e:
+        response.status = 500
+        print(e)
+        return { 'error': f'Failed to read diagram file: {str(e)}' }
+
     response.content_type = 'application/json'
-    return json.dumps(result)
+    return json.dumps({ 'files': result, 'mermaidStr': mermaidStr })
   except Exception as e:
     response.status = 500
     print(e)
