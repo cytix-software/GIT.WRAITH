@@ -51,11 +51,4 @@ def get_repo(github_url, clone_dir="./.git_wraith_repo") -> Dict[str, str]:
             abs_path = os.path.join(root, file)
             rel_path = os.path.relpath(abs_path, clone_dir)
 
-            try:
-                with open(abs_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    file_contents[rel_path] = content
-            except Exception as e:
-                print(f"Skipping {rel_path}: {e}")
-
     return file_contents

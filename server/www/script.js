@@ -76,8 +76,8 @@ function demoOutput(files) {
 
   outputBox.innerHTML =
     `<p><strong>Analysis Results for Repository: <a target="_blank" href="${url.href}">${url.pathname.slice(1)}</a></strong></p>` +
-    `<a href="./diagram" target="_blank" class="diagram-link">
-      <iframe src="./diagram" class="diagram-iframe" title="System Diagram"></iframe>
+    `<a href="./diagram?repo_url=${url.href}" target="_blank" class="diagram-link">
+      <iframe src="./diagram?repo_url=${url.href}" class="diagram-iframe" title="System Diagram"></iframe>
     </a>` +
     htmlContent;
 }
