@@ -59,14 +59,15 @@ function demoOutput(files) {
 
   let url;
   try {
-    url = new URL(gitURL.value);
+    const unprocessedUrl = new URL(gitURL.value);
+    url = {href: unprocessedUrl.href, name: unprocessedUrl.pathname.slice(1)};
   } catch {
-    return error(`<p>Failed to generate results - Given URL is not valid.</p>`);
+    url = {href: gitURL.value, name: gitURL.value}
   }
 
   // Convert the markdown to HTML using `marked`
   const htmlContent = files.reduce(
-    (str, [fullPath, fileName, content]) =>
+    (str, [fileName, fullPath, content]) =>
       (str += `<div class="file-box">
     <div class="file-title">${fileName}</div>
     <div class="file-description">${marked.parse(content)}</div>
@@ -75,7 +76,7 @@ function demoOutput(files) {
   );
 
   outputBox.innerHTML =
-    `<p><strong>Analysis Results for Repository: <a target="_blank" href="${url.href}">${url.pathname.slice(1)}</a></strong></p>` +
+    `<p><strong>Analysis Results for Repository: <a target="_blank" href="${url.href}">${url.name}</a></strong></p>` +
     `<a href="./diagram?repo_url=${url.href}" target="_blank" class="diagram-link">
       <iframe src="./diagram?repo_url=${url.href}" class="diagram-iframe" title="System Diagram"></iframe>
     </a>` +
