@@ -269,3 +269,34 @@ button:hover {
   text-shadow: 0 0 8px #66ff66;
   transform: scale(1.05);
 }
+
+.diagram-link {
+  display: block;
+  width: fit-content;
+  margin: 0 auto 20px auto;
+  border: 2px solid #00ffee;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 0 12px #00ffee;
+  animation: floaty 3s ease-in-out infinite;
+  transition: box-shadow 0.3s ease;
+}
+
+.diagram-link:hover {
+  box-shadow: 0 0 16px #66ff66, 0 0 30px #00ffee;
+}
+
+.diagram-iframe {
+  display: block;
+  width: 500px;
+  height: 300px;
+  border: none;
+  pointer-events: none; /* Makes sure clicking goes to the link */
+}
+
+/* Floating animation */
+@keyframes floaty {
+  0%   { transform: translateY(0px); }
+  50%  { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}

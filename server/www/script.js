@@ -73,7 +73,9 @@ function demoOutput(files) {
     `<p><strong>Analysis Results for Repository: <span>${url.pathname.slice(
       1
     )}</span></strong></p>` +
-    `<a href="./diagram" target="_blank">View diagram</a>` +
+    `<a href="./diagram" target="_blank" class="diagram-link">
+  <iframe src="./diagram" class="diagram-iframe" title="System Diagram"></iframe>
+</a>` +
     htmlContent;
 }
 
